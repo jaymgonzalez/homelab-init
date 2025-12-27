@@ -30,7 +30,7 @@ terraform apply
 
 # 3. Configure the control plane (from local machine)
 cd ansible
-ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup.yml
+ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup-apps.yml
 
 # 4. Use the control plane (SSH into it)
 ssh root@<control-plane-ip>
@@ -78,10 +78,10 @@ cd ansible
 
 # Run specific playbook
 ansible-playbook -i inventory/hosts.yml playbooks/pve-post-install.yml
-ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup.yml
+ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup-apps.yml
 
 # Run against single host
-ansible-playbook -i "192.168.1.10," -u root playbooks/control-plane-setup.yml
+ansible-playbook -i "192.168.1.10," -u root playbooks/control-plane-setup-apps.yml
 
 # Check connectivity
 ansible all -i inventory/hosts.yml -m ping
@@ -108,7 +108,7 @@ Located in `ansible/inventory/hosts.yml`:
 
 **IMPORTANT**: Add your SSH public keys before running this playbook to avoid getting locked out when password authentication is disabled.
 
-**control-plane-setup.yml** (runs on control plane LXC):
+**control-plane-setup-apps.yml** (runs on control plane LXC):
 - Installs Terraform (version 1.9.8 by default)
 - Installs Ansible via pipx with dependencies (proxmoxer, requests, jmespath)
 - Configures Git (user, email, default branch)
@@ -123,7 +123,7 @@ The control plane includes Tailscale for secure remote access to your homelab.
 
 ### Configuration
 
-Tailscale installation is controlled by variables in `control-plane-setup.yml`:
+Tailscale installation is controlled by variables in `control-plane-setup-apps.yml`:
 
 ```yaml
 install_tailscale: true  # Set to false to skip Tailscale

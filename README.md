@@ -73,7 +73,7 @@ ansible-playbook -i inventory/hosts.yml playbooks/control-plane-full-config.yml
 ansible-playbook -i inventory/hosts.yml playbooks/control-plane-tailscale.yml
 
 # Solo configuración del control plane
-ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup.yml
+ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup-apps.yml
 ```
 
 ## Estructura del Proyecto
@@ -97,7 +97,7 @@ ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup.yml
 │   ├── playbooks/
 │   │   ├── pve-post-install.yml
 │   │   ├── control-plane-tailscale.yml
-│   │   ├── control-plane-setup.yml
+│   │   ├── control-plane-setup-apps.yml
 │   │   └── control-plane-full-config.yml
 │   └── group_vars/
 │       └── all/

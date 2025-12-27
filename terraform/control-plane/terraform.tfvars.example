@@ -1,0 +1,65 @@
+# =============================================================================
+# Proxmox Connection
+# =============================================================================
+# Para crear el API token en Proxmox:
+# 1. Datacenter -> Permissions -> API Tokens
+# 2. Add: User: root@pam, Token ID: terraform
+# 3. Uncheck "Privilege Separation" para full access
+# =============================================================================
+
+proxmox_host             = "192.168.1.10"
+proxmox_api_token_id     = "root@pam!automation"
+proxmox_api_token_secret = "xxxxxxxxxxxxxxx"
+proxmox_tls_insecure     = true
+proxmox_node             = "pve-main"
+
+# =============================================================================
+# Control Plane Configuration
+# =============================================================================
+
+control_plane_vmid     = 100
+control_plane_hostname = "control-plane"
+control_plane_cores    = 2
+control_plane_memory   = 2048
+control_plane_swap     = 512
+control_plane_disk_size = "20G"
+control_plane_storage  = "local-lvm"
+root_password = "your-secure-password-here"
+
+
+# =============================================================================
+# Network
+# =============================================================================
+
+control_plane_ip = "192.168.10.99/24"
+gateway          = "192.168.10.1"
+nameserver       = "1.1.1.1"
+network_bridge   = "vmbr0"
+vlan_tag         = 10
+
+# =============================================================================
+# Template
+# =============================================================================
+# Asegúrate de tener el template descargado:
+# pveam download local debian-13-standard_13.1-2_amd64.tar.zst
+# =============================================================================
+
+template = "local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst"
+
+# =============================================================================
+# Access
+# =============================================================================
+
+
+# Puedes añadir múltiples keys separadas por newline
+ssh_public_keys = <<-EOT
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCouRsnZwzAf/...
+
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC7V1T6...
+EOT
+
+# =============================================================================
+# Tags
+# =============================================================================
+
+tags = ["iac", "control-plane", "terraform"]

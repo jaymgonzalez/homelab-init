@@ -11,5 +11,5 @@
 - name: Bootstrap Tailscale on Control Plane
   import_playbook: control-plane-tailscale.yml
 
-- name: Configure Control Plane
-  import_playbook: control-plane-setup.yml
+- name: Configure Control Plane Apps
+  import_playbook: control-plane-setup-apps.yml
