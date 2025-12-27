@@ -10,15 +10,6 @@
   gather_facts: false
 
   tasks:
-    - name: Check current container features
-      ansible.builtin.command: pct config 101
-      register: container_config
-      changed_when: false
-
-    - name: Display current config
-      ansible.builtin.debug:
-        msg: "{{ container_config.stdout_lines }}"
-
     - name: Enable LXC features for GitLab container
       ansible.builtin.shell: pct set 101 --features nesting=1,keyctl=1
       changed_when: true
@@ -34,15 +25,6 @@
         - { key: 'kernel.shmmax', value: '17179869184' }
         - { key: 'kernel.shmall', value: '4194304' }
         - { key: 'vm.max_map_count', value: '262144' }
-
-    - name: Verify features were set
-      ansible.builtin.command: pct config 101
-      register: container_config_after
-      changed_when: false
-
-    - name: Display updated config
-      ansible.builtin.debug:
-        msg: "{{ container_config_after.stdout_lines }}"
 
     - name: Stop GitLab container
       ansible.builtin.command: pct stop 101
@@ -158,7 +140,6 @@
         - { regexp: "^# puma\\['worker_processes'\\]", line: "puma['worker_processes'] = {{ gitlab_puma_worker_processes }}" }
         - { regexp: "^# sidekiq\\['concurrency'\\]", line: "sidekiq['concurrency'] = {{ gitlab_sidekiq_concurrency }}" }
         - { regexp: "^# prometheus_monitoring\\['enable'\\]", line: "prometheus_monitoring['enable'] = false" }
-        - { regexp: "^# grafana\\['enable'\\]", line: "grafana['enable'] = false" }
         - { regexp: "^# postgresql\\['shared_buffers'\\]", line: "postgresql['shared_buffers'] = '256MB'" }
 
     - name: Add Redis memory limit to gitlab.rb
