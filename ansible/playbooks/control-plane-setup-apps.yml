@@ -99,10 +99,6 @@
       register: terraform_version_output
       changed_when: false
 
-    - name: Display Terraform version
-      ansible.builtin.debug:
-        msg: "{{ terraform_version_output.stdout }}"
-
     # -------------------------------------------------------------------------
     # Install Python/Ansible
     # -------------------------------------------------------------------------
@@ -241,16 +237,6 @@
       changed_when: false
       failed_when: false
 
-    - name: Display Tailscale information
-      ansible.builtin.debug:
-        msg:
-          - "============================================"
-          - "Tailscale Status"
-          - "============================================"
-          - "IPv4: {{ tailscale_ipv4.stdout if tailscale_ipv4.rc == 0 else 'Not connected' }}"
-          - "Status: {{ 'Connected' if tailscale_ipv4.rc == 0 else 'Not connected' }}"
-          - "============================================"
-
     # -------------------------------------------------------------------------
     # Summary
     # -------------------------------------------------------------------------
@@ -258,15 +244,14 @@
       ansible.builtin.debug:
         msg:
           - "============================================"
-          - "Control Plane Setup Complete!"
+          - "CONTROL PLANE SETUP COMPLETE!"
           - "============================================"
           - "Terraform: {{ terraform_version_output.stdout_lines[0] }}"
           - "Ansible: installed via pipx"
           - "Tailscale: {{ tailscale_ipv4.stdout if tailscale_ipv4.rc == 0 else 'Not connected' }}"
           - "Workspace: {{ workspace_dir }}"
-          - "============================================"
+          - ""
           - "Next steps:"
-          - "1. Add the SSH key above to your Git provider"
-          - "2. Add the SSH key to PVE's authorized_keys"
-          - "3. Clone your IaC repo to {{ workspace_dir }}"
+          - "1. Add SSH key to Git provider"
+          - "2. Clone IaC repo to {{ workspace_dir }}"
           - "============================================"
