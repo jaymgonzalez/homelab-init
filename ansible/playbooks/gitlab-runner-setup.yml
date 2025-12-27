@@ -1,0 +1,135 @@
+---
+# =============================================================================
+# GitLab Runner Installation and Registration
+# =============================================================================
+# Installs GitLab Runner on control-plane and registers it with GitLab
+# =============================================================================
+
+- name: Install GitLab Runner on Control Plane
+  hosts: control_plane
+  gather_facts: true
+
+  vars:
+    gitlab_url: "http://{{ hostvars['gitlab']['ansible_host'] }}"
+    gitlab_runner_registration_token: "{{ vault_gitlab_runner_registration_token }}"
+    gitlab_runner_description: "Control Plane Runner"
+    gitlab_runner_tags: "docker,homelab"
+    gitlab_runner_executor: "docker"
+    gitlab_runner_default_image: "alpine:latest"
+    gitlab_runner_concurrency: 2
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # Add GitLab Runner Repository
+    # -------------------------------------------------------------------------
+    - name: Download GitLab Runner repository installation script
+      ansible.builtin.get_url:
+        url: https://packages.gitlab.com/install/repositories/runner/gitlab-runner/script.deb.sh
+        dest: /tmp/gitlab_runner_install.sh
+        mode: '0755'
+
+    - name: Run GitLab Runner repository installation script
+      ansible.builtin.command: bash /tmp/gitlab_runner_install.sh
+      args:
+        creates: /etc/apt/sources.list.d/runner_gitlab-runner.list
+
+    # -------------------------------------------------------------------------
+    # Install GitLab Runner
+    # -------------------------------------------------------------------------
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install GitLab Runner
+      ansible.builtin.apt:
+        name: gitlab-runner
+        state: present
+
+    # -------------------------------------------------------------------------
+    # Check if Runner is Already Registered
+    # -------------------------------------------------------------------------
+    - name: Check if runner is already registered
+      ansible.builtin.stat:
+        path: /etc/gitlab-runner/config.toml
+      register: runner_config
+
+    - name: Check runner configuration content
+      ansible.builtin.command: cat /etc/gitlab-runner/config.toml
+      register: runner_config_content
+      changed_when: false
+      when: runner_config.stat.exists
+
+    # -------------------------------------------------------------------------
+    # Register GitLab Runner
+    # -------------------------------------------------------------------------
+    - name: Register GitLab Runner
+      ansible.builtin.command: >
+        gitlab-runner register
+        --non-interactive
+        --url "{{ gitlab_url }}"
+        --registration-token "{{ gitlab_runner_registration_token }}"
+        --executor "{{ gitlab_runner_executor }}"
+        --docker-image "{{ gitlab_runner_default_image }}"
+        --description "{{ gitlab_runner_description }}"
+        --tag-list "{{ gitlab_runner_tags }}"
+        --run-untagged="true"
+        --locked="false"
+      when: >
+        not runner_config.stat.exists or
+        (runner_config_content.stdout is defined and gitlab_url not in runner_config_content.stdout)
+
+    # -------------------------------------------------------------------------
+    # Configure Runner Concurrency
+    # -------------------------------------------------------------------------
+    - name: Set runner concurrency
+      ansible.builtin.lineinfile:
+        path: /etc/gitlab-runner/config.toml
+        regexp: '^concurrent ='
+        line: "concurrent = {{ gitlab_runner_concurrency }}"
+        create: false
+
+    # -------------------------------------------------------------------------
+    # Start and Enable GitLab Runner
+    # -------------------------------------------------------------------------
+    - name: Start and enable GitLab Runner service
+      ansible.builtin.systemd:
+        name: gitlab-runner
+        state: started
+        enabled: true
+
+    # -------------------------------------------------------------------------
+    # Verify Runner Status
+    # -------------------------------------------------------------------------
+    - name: Get GitLab Runner status
+      ansible.builtin.command: gitlab-runner status
+      register: runner_status
+      changed_when: false
+
+    - name: List registered runners
+      ansible.builtin.command: gitlab-runner list
+      register: runner_list
+      changed_when: false
+
+    # -------------------------------------------------------------------------
+    # Summary
+    # -------------------------------------------------------------------------
+    - name: Installation summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "GITLAB RUNNER INSTALLATION COMPLETE!"
+          - "============================================"
+          - "Runner status: {{ runner_status.stdout }}"
+          - "GitLab URL: {{ gitlab_url }}"
+          - "Executor: {{ gitlab_runner_executor }}"
+          - "Default image: {{ gitlab_runner_default_image }}"
+          - "Concurrency: {{ gitlab_runner_concurrency }}"
+          - "Tags: {{ gitlab_runner_tags }}"
+          - ""
+          - "Registered runners:"
+          - "{{ runner_list.stdout }}"
+          - ""
+          - "Verify in GitLab:"
+          - "{{ gitlab_url }}/admin/runners"
+          - "============================================"

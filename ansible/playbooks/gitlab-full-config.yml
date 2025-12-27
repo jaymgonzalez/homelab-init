@@ -1,0 +1,18 @@
+---
+# =============================================================================
+# GitLab Full Deployment
+# =============================================================================
+# Meta-playbook that runs the complete GitLab setup:
+# 1. Install Docker on control-plane (for GitLab Runner)
+# 2. Install and configure GitLab CE
+# 3. Install and register GitLab Runner
+# =============================================================================
+
+- name: Install Docker on Control Plane
+  import_playbook: control-plane-docker.yml
+
+- name: Install and Configure GitLab CE
+  import_playbook: gitlab-setup.yml
+
+- name: Install GitLab Runner on Control Plane
+  import_playbook: gitlab-runner-setup.yml

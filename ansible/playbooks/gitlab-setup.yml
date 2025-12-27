@@ -1,0 +1,144 @@
+---
+# =============================================================================
+# GitLab CE Installation and Configuration
+# =============================================================================
+# Installs GitLab CE with Container Registry and homelab optimizations
+# =============================================================================
+
+- name: Install and Configure GitLab CE
+  hosts: gitlab
+  gather_facts: true
+
+  vars:
+    gitlab_external_url: "http://{{ ansible_host }}"
+    gitlab_registry_external_url: "http://registry.{{ ansible_host }}:5050"
+    gitlab_initial_root_password: "{{ vault_gitlab_initial_root_password }}"
+    # Homelab resource optimizations
+    gitlab_puma_worker_processes: 2
+    gitlab_sidekiq_concurrency: 10
+    disable_prometheus: true
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # System Update and Dependencies
+    # -------------------------------------------------------------------------
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Upgrade all packages
+      ansible.builtin.apt:
+        upgrade: dist
+        autoremove: true
+
+    - name: Install dependencies
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - openssh-server
+          - postfix
+          - tzdata
+          - perl
+        state: present
+
+    # -------------------------------------------------------------------------
+    # Add GitLab Repository
+    # -------------------------------------------------------------------------
+    - name: Download GitLab repository installation script
+      ansible.builtin.get_url:
+        url: https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh
+        dest: /tmp/gitlab_install.sh
+        mode: '0755'
+
+    - name: Run GitLab repository installation script
+      ansible.builtin.command: bash /tmp/gitlab_install.sh
+      args:
+        creates: /etc/apt/sources.list.d/gitlab_gitlab-ce.list
+
+    # -------------------------------------------------------------------------
+    # Install GitLab CE
+    # -------------------------------------------------------------------------
+    - name: Install GitLab CE
+      ansible.builtin.apt:
+        name: gitlab-ce
+        state: present
+        update_cache: true
+      environment:
+        EXTERNAL_URL: "{{ gitlab_external_url }}"
+        GITLAB_ROOT_PASSWORD: "{{ gitlab_initial_root_password }}"
+
+    # -------------------------------------------------------------------------
+    # Configure GitLab
+    # -------------------------------------------------------------------------
+    - name: Configure GitLab in /etc/gitlab/gitlab.rb
+      ansible.builtin.lineinfile:
+        path: /etc/gitlab/gitlab.rb
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        create: false
+      loop:
+        - { regexp: "^external_url", line: "external_url '{{ gitlab_external_url }}'" }
+        - { regexp: "^# registry_external_url", line: "registry_external_url '{{ gitlab_registry_external_url }}'" }
+        - { regexp: "^# gitlab_rails\\['registry_enabled'\\]", line: "gitlab_rails['registry_enabled'] = true" }
+        - { regexp: "^# puma\\['worker_processes'\\]", line: "puma['worker_processes'] = {{ gitlab_puma_worker_processes }}" }
+        - { regexp: "^# sidekiq\\['concurrency'\\]", line: "sidekiq['concurrency'] = {{ gitlab_sidekiq_concurrency }}" }
+        - { regexp: "^# prometheus_monitoring\\['enable'\\]", line: "prometheus_monitoring['enable'] = false" }
+        - { regexp: "^# grafana\\['enable'\\]", line: "grafana['enable'] = false" }
+        - { regexp: "^# postgresql\\['shared_buffers'\\]", line: "postgresql['shared_buffers'] = '256MB'" }
+
+    - name: Add Redis memory limit to gitlab.rb
+      ansible.builtin.lineinfile:
+        path: /etc/gitlab/gitlab.rb
+        line: "redis['maxmemory'] = '256mb'"
+        insertafter: "^# redis\\['maxmemory'\\]"
+
+    # -------------------------------------------------------------------------
+    # Reconfigure GitLab
+    # -------------------------------------------------------------------------
+    - name: Reconfigure GitLab
+      ansible.builtin.command: gitlab-ctl reconfigure
+      async: 600
+      poll: 10
+
+    # -------------------------------------------------------------------------
+    # Wait for GitLab to be Ready
+    # -------------------------------------------------------------------------
+    - name: Wait for GitLab to be ready
+      ansible.builtin.uri:
+        url: "{{ gitlab_external_url }}"
+        status_code: 200
+        validate_certs: false
+      register: result
+      until: result.status == 200
+      retries: 30
+      delay: 10
+
+    # -------------------------------------------------------------------------
+    # Display Information
+    # -------------------------------------------------------------------------
+    - name: Get GitLab status
+      ansible.builtin.command: gitlab-ctl status
+      register: gitlab_status
+      changed_when: false
+
+    - name: Installation summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "GITLAB CE INSTALLATION COMPLETE!"
+          - "============================================"
+          - "GitLab URL: {{ gitlab_external_url }}"
+          - "Container Registry: {{ gitlab_registry_external_url }}"
+          - "Username: root"
+          - "Password: (set in vault_gitlab_initial_root_password)"
+          - ""
+          - "Next steps:"
+          - "1. Login to GitLab at {{ gitlab_external_url }}"
+          - "2. Navigate to: Admin → CI/CD → Runners"
+          - "3. Copy the registration token"
+          - "4. Add token to vault: ansible-vault edit group_vars/all/vault.yml"
+          - "   Add: vault_gitlab_runner_registration_token: 'TOKEN'"
+          - "5. Run: ansible-playbook -i inventory/hosts.yml playbooks/gitlab-runner-setup.yml"
+          - "============================================"
