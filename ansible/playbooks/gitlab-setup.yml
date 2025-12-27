@@ -9,6 +9,9 @@
   hosts: gitlab
   gather_facts: true
 
+  vars_files:
+    - ../group_vars/all/vault.yml
+
   vars:
     gitlab_external_url: "http://{{ ansible_host }}"
     gitlab_registry_external_url: "http://registry.{{ ansible_host }}:5050"
