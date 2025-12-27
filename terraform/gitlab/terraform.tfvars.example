@@ -1,0 +1,63 @@
+# =============================================================================
+# Proxmox Connection
+# =============================================================================
+# To create the API token in Proxmox:
+# 1. Datacenter -> Permissions -> API Tokens
+# 2. Add: User: root@pam, Token ID: terraform
+# 3. Uncheck "Privilege Separation" for full access
+# =============================================================================
+
+proxmox_host             = "192.168.1.10"        # Proxmox host IP
+proxmox_api_token_id     = "root@pam!terraform"  # API token ID
+proxmox_api_token_secret = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # API token secret
+proxmox_tls_insecure     = true                  # Skip TLS verification
+proxmox_node             = "pve"                 # Proxmox node name
+
+# =============================================================================
+# GitLab LXC Configuration
+# =============================================================================
+
+gitlab_vmid         = 101             # VM ID (next after control-plane's 100)
+gitlab_hostname     = "gitlab"        # Hostname for the container
+gitlab_cores        = 2               # CPU cores
+gitlab_memory       = 4096            # RAM in MB (4GB - GitLab minimum)
+gitlab_swap         = 1024            # Swap in MB
+gitlab_disk_size    = "30G"           # Root disk size (as requested)
+gitlab_storage      = "local-lvm"     # Storage pool
+root_password       = "your-secure-password-here"  # Root password for the container
+
+# =============================================================================
+# Network Configuration
+# =============================================================================
+
+gitlab_ip      = "192.168.10.101/24"  # Static IP in CIDR format (VLAN 10, same as control-plane)
+gateway        = "192.168.10.1"       # Network gateway
+nameserver     = "1.1.1.1"            # DNS server
+network_bridge = "vmbr0"              # Network bridge
+vlan_tag       = 10                   # VLAN tag (10 for same network as control-plane)
+
+# =============================================================================
+# Template
+# =============================================================================
+# Make sure you have the template downloaded:
+# pveam download local debian-13-standard_13.1-2_amd64.tar.zst
+# =============================================================================
+
+template = "local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst"
+
+# =============================================================================
+# SSH Access
+# =============================================================================
+# Add your SSH public keys here. You can add multiple keys separated by newline.
+# Get your key with: cat ~/.ssh/id_ed25519.pub
+# =============================================================================
+
+ssh_public_keys = <<-EOT
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@laptop
+EOT
+
+# =============================================================================
+# Tags
+# =============================================================================
+
+tags = ["iac", "gitlab", "terraform"]
