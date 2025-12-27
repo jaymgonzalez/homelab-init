@@ -109,7 +109,7 @@ Located in `ansible/inventory/hosts.yml`:
 **IMPORTANT**: Add your SSH public keys before running this playbook to avoid getting locked out when password authentication is disabled.
 
 **control-plane-setup-apps.yml** (runs on control plane LXC):
-- Installs Terraform (version 1.9.8 by default)
+- Installs Terraform (version 1.14.3 by default)
 - Installs Ansible via pipx with dependencies (proxmoxer, requests, jmespath)
 - Configures Git (user, email, default branch)
 - Generates ED25519 SSH key for the control plane
