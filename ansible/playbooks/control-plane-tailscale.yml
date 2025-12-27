@@ -154,53 +154,6 @@
       async: 300
       poll: 5
 
-    - name: Enable Tailscale daemon on boot
-      ansible.builtin.command:
-        cmd: pct exec 100 -- systemctl enable tailscaled
-      changed_when: true
-
-    - name: Start Tailscale daemon
-      ansible.builtin.command:
-        cmd: pct exec 100 -- systemctl start tailscaled
-      changed_when: true
-
-    - name: Wait for Tailscale daemon to initialize
-      ansible.builtin.pause:
-        seconds: 5
-
-    - name: Check Tailscale daemon status
-      ansible.builtin.command:
-        cmd: pct exec 100 -- systemctl status tailscaled
-      register: daemon_status
-      changed_when: false
-      failed_when: false
-
-    - name: Display daemon status
-      ansible.builtin.debug:
-        var: daemon_status.stdout_lines
-
-    - name: Verify tailscaled socket exists
-      ansible.builtin.command:
-        cmd: pct exec 100 -- ls -la /var/run/tailscale/tailscaled.sock
-      register: socket_check
-      changed_when: false
-      failed_when: false
-
-    - name: Display socket status
-      ansible.builtin.debug:
-        msg: "Socket exists: {{ 'Yes' if socket_check.rc == 0 else 'No' }}"
-
-    - name: Get tailscaled logs
-      ansible.builtin.command:
-        cmd: pct exec 100 -- journalctl -u tailscaled -n 20 --no-pager
-      register: tailscaled_logs
-      changed_when: false
-      failed_when: false
-
-    - name: Display tailscaled logs
-      ansible.builtin.debug:
-        var: tailscaled_logs.stdout_lines
-
     - name: Enable TUN device for container
       ansible.builtin.command:
         cmd: pct set 100 --features nesting=1,keyctl=1
@@ -218,7 +171,7 @@
         line: 'lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file'
         state: present
 
-    - name: Stop container to apply changes
+    - name: Stop container to apply TUN device
       ansible.builtin.command:
         cmd: pct stop 100
       changed_when: true
@@ -232,16 +185,21 @@
         cmd: pct start 100
       changed_when: true
 
-    - name: Wait for container to start
+    - name: Wait for container to fully start
       ansible.builtin.pause:
         seconds: 10
 
-    - name: Start tailscaled after restart
+    - name: Enable Tailscale daemon on boot
+      ansible.builtin.command:
+        cmd: pct exec 100 -- systemctl enable tailscaled
+      changed_when: true
+
+    - name: Start Tailscale daemon
       ansible.builtin.command:
         cmd: pct exec 100 -- systemctl start tailscaled
       changed_when: true
 
-    - name: Wait for tailscaled to start
+    - name: Wait for Tailscale daemon to initialize
       ansible.builtin.pause:
         seconds: 5
 
@@ -362,6 +320,20 @@
         mode: '0644'
       delegate_to: localhost
 
+    - name: Update inventory with Tailscale IP
+      ansible.builtin.lineinfile:
+        path: ../inventory/hosts.yml
+        regexp: '^\s+ansible_host:\s+.*\s+#\s+control_plane'
+        line: '          ansible_host: {{ tailscale_ipv4.stdout }}  # control_plane'
+        backrefs: false
+      delegate_to: localhost
+
+    - name: Add Tailscale IP to hostvars
+      ansible.builtin.add_host:
+        name: control
+        ansible_host: "{{ tailscale_ipv4.stdout }}"
+        groups: control_plane
+
 - name: Final summary
   hosts: proxmox
   gather_facts: false
@@ -383,8 +355,10 @@
           - "  - NAT enabled for internet access"
           - ""
           - "Next steps:"
-          - "1. Check /tmp/control-plane-tailscale-ip.txt for the Tailscale IP"
-          - "2. Update ansible/inventory/hosts.yml with the Tailscale IP"
-          - "3. Test: ssh root@<tailscale-ip>"
-          - "4. Run: ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup.yml"
+          - "1. ✓ Tailscale IP saved to /tmp/control-plane-tailscale-ip.txt"
+          - "2. ✓ Inventory automatically updated with Tailscale IP"
+          - "3. Test SSH: ssh root@<tailscale-ip>"
+          - "4. Run setup: ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup.yml"
+          - ""
+          - "Note: control-plane-setup.yml will now connect via Tailscale!"
           - "============================================"

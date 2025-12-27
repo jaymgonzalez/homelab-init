@@ -253,7 +253,7 @@ Update `ansible_host` values for your environment:
 
 - The bootstrap process requires Terraform and Ansible on your **local machine** for initial setup
 - Proxmox VE 8.x is expected
-- Ubuntu 24.04 LXC template must be downloaded to PVE before running Terraform (`pveam download local ubuntu-24.04-standard_24.04-2_amd64.tar.zst`)
+- Debian 13 LXC template must be downloaded to PVE before running Terraform (`pveam download local debian-13-standard_13.1-2_amd64.tar.zst`)
 - Control plane SSH key is auto-generated and displayed during setup - add it to Git provider and PVE authorized_keys
 - The workspace directory on control plane is `/opt/iac` with the `$IAC_HOME` environment variable
 - Terraform state is local by default (consider remote backend for production)

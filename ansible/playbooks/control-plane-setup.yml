@@ -42,12 +42,6 @@
       - tree
       - tmux
 
-    # Tailscale
-    install_tailscale: true
-    # Set to empty string to skip auto-connection, or provide auth key
-    tailscale_authkey: ""
-    tailscale_args: "--ssh --accept-routes"
-
     # Git config
     git_user_name: "IaC Control Plane"
     git_user_email: "iac@homelab.local"
@@ -234,63 +228,29 @@
         marker: "# {mark} ANSIBLE MANAGED - IaC ALIASES"
 
     # -------------------------------------------------------------------------
-    # Install Tailscale
+    # Verify Tailscale (installed during bootstrap)
     # -------------------------------------------------------------------------
-    - name: Add Tailscale GPG key
-      ansible.builtin.get_url:
-        url: https://pkgs.tailscale.com/stable/debian/{{ ansible_distribution_release }}.noarmor.gpg
-        dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
-        mode: '0644'
-      when: install_tailscale
-
-    - name: Add Tailscale repository
-      ansible.builtin.apt_repository:
-        repo: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/debian {{ ansible_distribution_release }} main"
-        filename: tailscale
-        state: present
-      when: install_tailscale
-
-    - name: Install Tailscale
-      ansible.builtin.apt:
-        name: tailscale
-        state: present
-        update_cache: true
-      when: install_tailscale
-
-    - name: Enable and start Tailscale service
-      ansible.builtin.systemd:
-        name: tailscaled
-        enabled: true
-        state: started
-      when: install_tailscale
-
-    - name: Connect to Tailscale (with authkey)
-      ansible.builtin.command: "tailscale up {{ tailscale_args }} --authkey={{ tailscale_authkey }}"
-      when:
-        - install_tailscale
-        - tailscale_authkey != ""
-      register: tailscale_up
-      changed_when: "'Success' in tailscale_up.stdout or tailscale_up.rc == 0"
-      failed_when: false
-
-    - name: Get Tailscale status
-      ansible.builtin.command: tailscale status
-      register: tailscale_status
+    - name: Check Tailscale status
+      ansible.builtin.command: tailscale status --json
+      register: tailscale_status_json
       changed_when: false
       failed_when: false
-      when: install_tailscale
 
-    - name: Display Tailscale connection instructions
+    - name: Get Tailscale IP addresses
+      ansible.builtin.command: tailscale ip -4
+      register: tailscale_ipv4
+      changed_when: false
+      failed_when: false
+
+    - name: Display Tailscale information
       ansible.builtin.debug:
         msg:
           - "============================================"
-          - "Tailscale Installation Complete"
+          - "Tailscale Status"
           - "============================================"
-          - "{% if tailscale_authkey == '' %}To connect to Tailscale, run:{% endif %}"
-          - "{% if tailscale_authkey == '' %}  tailscale up {{ tailscale_args }}{% endif %}"
-          - "{% if tailscale_authkey == '' %}Then authenticate via the URL provided{% endif %}"
-          - "{% if tailscale_authkey != '' %}Status: {{ tailscale_status.stdout_lines[0] if tailscale_status.stdout_lines else 'Connected' }}{% endif %}"
-      when: install_tailscale
+          - "IPv4: {{ tailscale_ipv4.stdout if tailscale_ipv4.rc == 0 else 'Not connected' }}"
+          - "Status: {{ 'Connected' if tailscale_ipv4.rc == 0 else 'Not connected' }}"
+          - "============================================"
 
     # -------------------------------------------------------------------------
     # Summary
@@ -303,12 +263,11 @@
           - "============================================"
           - "Terraform: {{ terraform_version_output.stdout_lines[0] }}"
           - "Ansible: installed via pipx"
-          - "Tailscale: {{ 'installed' if install_tailscale else 'skipped' }}"
+          - "Tailscale: {{ tailscale_ipv4.stdout if tailscale_ipv4.rc == 0 else 'Not connected' }}"
           - "Workspace: {{ workspace_dir }}"
           - "============================================"
           - "Next steps:"
           - "1. Add the SSH key above to your Git provider"
           - "2. Add the SSH key to PVE's authorized_keys"
-          - "{% if install_tailscale and tailscale_authkey == '' %}3. Connect to Tailscale: tailscale up {{ tailscale_args }}{% endif %}"
-          - "{% if install_tailscale and tailscale_authkey == '' %}4. Clone your IaC repo to {{ workspace_dir }}{% else %}3. Clone your IaC repo to {{ workspace_dir }}{% endif %}"
+          - "3. Clone your IaC repo to {{ workspace_dir }}"
           - "============================================"

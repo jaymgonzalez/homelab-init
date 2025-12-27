@@ -48,10 +48,31 @@ terraform plan
 terraform apply
 ```
 
-### 3. Configurar el Control Plane
+### 3. Bootstrap y Configurar el Control Plane (todo en uno)
 
 ```bash
 cd ansible
+ansible-playbook -i inventory/hosts.yml playbooks/control-plane-full-config.yml
+```
+
+**¿Qué hace este paso?**
+1. **Tailscale Bootstrap:**
+   - Configura VLAN 10 temporal con NAT
+   - Instala Tailscale en el contenedor
+   - Conecta usando auth key desde vault
+   - Actualiza inventario con IP de Tailscale
+2. **Control Plane Setup:**
+   - Se conecta vía Tailscale (IP actualizada automáticamente)
+   - Instala Terraform y Ansible
+   - Configura Git y genera SSH keys
+   - Crea workspace en /opt/iac
+
+**Alternativamente**, puedes ejecutar los playbooks por separado:
+```bash
+# Solo Tailscale
+ansible-playbook -i inventory/hosts.yml playbooks/control-plane-tailscale.yml
+
+# Solo configuración del control plane
 ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup.yml
 ```
 
@@ -75,10 +96,12 @@ ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup.yml
 │   │   └── hosts.yml
 │   ├── playbooks/
 │   │   ├── pve-post-install.yml
-│   │   └── control-plane-setup.yml
-│   └── roles/
-│       ├── pve-post-install/
-│       └── control-plane/
+│   │   ├── control-plane-tailscale.yml
+│   │   ├── control-plane-setup.yml
+│   │   └── control-plane-full-config.yml
+│   └── group_vars/
+│       └── all/
+│           └── vault.yml
 └── scripts/
     └── bootstrap.sh            # Script inicial para empezar
 ```
@@ -92,7 +115,7 @@ ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup.yml
 
 ### En el PVE host
 - Proxmox VE 8.x
-- Template LXC de Ubuntu 24.04 descargado (`pveam download local ubuntu-24.04-standard_24.04-2_amd64.tar.zst`)
+- Template LXC de Debian 13 descargado (`pveam download local debian-13-standard_13.1-2_amd64.tar.zst`)
 
 ## Variables Importantes
 

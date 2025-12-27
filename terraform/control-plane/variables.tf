@@ -114,9 +114,9 @@ variable "vlan_tag" {
 # =============================================================================
 
 variable "template" {
-  description = "LXC template to use (e.g., local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst)"
+  description = "LXC template to use (e.g., local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst)"
   type        = string
-  default     = "local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst"
+  default     = "local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst"
 }
 
 # =============================================================================

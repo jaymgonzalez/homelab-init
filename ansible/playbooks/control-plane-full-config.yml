@@ -1,0 +1,15 @@
+---
+# =============================================================================
+# Control Plane Full Configuration
+# =============================================================================
+# Este playbook ejecuta todo el proceso de configuración del control plane:
+# 1. Configura Tailscale con VLAN 10 temporal y NAT
+# 2. Actualiza el inventario automáticamente con la IP de Tailscale
+# 3. Configura el control plane completo (Terraform, Ansible, Git, etc.)
+# =============================================================================
+
+- name: Bootstrap Tailscale on Control Plane
+  import_playbook: control-plane-tailscale.yml
+
+- name: Configure Control Plane
+  import_playbook: control-plane-setup.yml
