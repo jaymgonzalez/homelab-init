@@ -9,6 +9,9 @@
   hosts: localhost
   gather_facts: true
 
+  vars_files:
+    - ../group_vars/all/vault.yml
+
   vars:
     gitlab_url: "http://{{ hostvars['gitlab']['ansible_host'] }}"
     gitlab_runner_registration_token: "{{ vault_gitlab_runner_registration_token }}"
