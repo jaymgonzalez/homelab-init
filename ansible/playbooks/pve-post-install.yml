@@ -1,0 +1,214 @@
+---
+# =============================================================================
+# Proxmox VE Post-Install Playbook
+# =============================================================================
+# Basado en el script de tteck pero convertido a Ansible
+# https://tteck.github.io/Proxmox/
+# =============================================================================
+
+- name: Proxmox VE Post-Install Configuration
+  hosts: proxmox
+  gather_facts: true
+
+  vars:
+    # Configuración
+    disable_enterprise_repo: true
+    enable_no_subscription_repo: true
+    disable_subscription_nag: true
+    update_system: true
+    install_common_tools: true
+    configure_ssh: true
+
+    # SSH Keys - Add your public keys here (one per line)
+    # Or set this in inventory/hosts.yml per host (recommended)
+    # ssh_public_keys: []
+    # Example:
+    # ssh_public_keys:
+    #   - "ssh-ed25519 AAAAC3... user@machine1"
+    #   - "ssh-ed25519 AAAAC3... user@machine2"
+
+    common_packages:
+      - vim
+      - htop
+      - curl
+      - wget
+      - net-tools
+      - dnsutils
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # Verificar que es Proxmox
+    # -------------------------------------------------------------------------
+    - name: Check if running on Proxmox VE
+      ansible.builtin.stat:
+        path: /etc/pve
+      register: pve_check
+
+    - name: Fail if not Proxmox
+      ansible.builtin.fail:
+        msg: "This playbook is intended for Proxmox VE hosts only"
+      when: not pve_check.stat.exists
+
+    - name: Get Proxmox version
+      ansible.builtin.command: pveversion
+      register: pve_version
+      changed_when: false
+
+    - name: Display Proxmox version
+      ansible.builtin.debug:
+        msg: "Running on {{ pve_version.stdout }}"
+
+    # -------------------------------------------------------------------------
+    # Enterprise Repository
+    # -------------------------------------------------------------------------
+    - name: Disable Proxmox VE Enterprise Repository
+      ansible.builtin.replace:
+        path: /etc/apt/sources.list.d/pve-enterprise.list
+        regexp: '^deb'
+        replace: '# deb'
+      when: disable_enterprise_repo
+      register: enterprise_repo
+
+    - name: Disable Ceph Enterprise Repository (if exists)
+      ansible.builtin.replace:
+        path: /etc/apt/sources.list.d/ceph.list
+        regexp: '^deb'
+        replace: '# deb'
+      when: disable_enterprise_repo
+      failed_when: false
+
+    # -------------------------------------------------------------------------
+    # No-Subscription Repository
+    # -------------------------------------------------------------------------
+    - name: Add Proxmox VE No-Subscription Repository
+      ansible.builtin.apt_repository:
+        repo: "deb http://download.proxmox.com/debian/pve {{ ansible_facts['distribution_release'] }} pve-no-subscription"
+        filename: pve-no-subscription
+        state: present
+      when: enable_no_subscription_repo
+
+    # -------------------------------------------------------------------------
+    # Disable Subscription Nag
+    # -------------------------------------------------------------------------
+    - name: Check for subscription nag in proxmoxlib.js
+      ansible.builtin.shell: |
+        grep -l "Proxmox.Utils.checked_command" /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js || true
+      register: nag_check
+      changed_when: false
+      when: disable_subscription_nag
+
+    - name: Disable subscription nag popup
+      ansible.builtin.replace:
+        path: /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
+        regexp: '(Ext\.Msg\.show\(\{\s*title:\s*gettext\(.No valid subscription)'
+        replace: 'void({ //\1'
+      when:
+        - disable_subscription_nag
+        - nag_check.stdout != ""
+      notify: Restart pveproxy
+
+    # -------------------------------------------------------------------------
+    # Update System
+    # -------------------------------------------------------------------------
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: update_system
+
+    - name: Upgrade all packages
+      ansible.builtin.apt:
+        upgrade: dist
+        autoremove: true
+        autoclean: true
+      when: update_system
+      register: upgrade_result
+
+    - name: Display upgrade results
+      ansible.builtin.debug:
+        msg: "Packages upgraded: {{ upgrade_result.stdout_lines | default([]) | length }}"
+      when: update_system
+
+    # -------------------------------------------------------------------------
+    # Install Common Tools
+    # -------------------------------------------------------------------------
+    - name: Install common utilities
+      ansible.builtin.apt:
+        name: "{{ common_packages }}"
+        state: present
+      when: install_common_tools
+
+    # -------------------------------------------------------------------------
+    # SSH Configuration
+    # -------------------------------------------------------------------------
+    - name: Ensure .ssh directory exists
+      ansible.builtin.file:
+        path: /root/.ssh
+        state: directory
+        mode: '0700'
+        owner: root
+        group: root
+      when: configure_ssh
+
+    - name: Add SSH public keys to authorized_keys
+      ansible.builtin.lineinfile:
+        path: /root/.ssh/authorized_keys
+        line: "{{ item }}"
+        create: true
+        mode: '0600'
+        owner: root
+        group: root
+      loop: "{{ ssh_public_keys | default([]) }}"
+      when:
+        - configure_ssh
+        - ssh_public_keys is defined
+        - ssh_public_keys | length > 0
+
+    - name: Configure SSH - Disable root password login (keep key-based)
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PermitRootLogin'
+        line: 'PermitRootLogin prohibit-password'
+      when: configure_ssh
+      notify: Restart sshd
+
+    - name: Configure SSH - Enable PubkeyAuthentication
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PubkeyAuthentication'
+        line: 'PubkeyAuthentication yes'
+      when: configure_ssh
+      notify: Restart sshd
+
+    # -------------------------------------------------------------------------
+    # Summary
+    # -------------------------------------------------------------------------
+    - name: Post-install summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "Proxmox VE Post-Install Complete!"
+          - "============================================"
+          - "Enterprise repo disabled: {{ disable_enterprise_repo }}"
+          - "No-subscription repo enabled: {{ enable_no_subscription_repo }}"
+          - "Subscription nag disabled: {{ disable_subscription_nag }}"
+          - "System updated: {{ update_system }}"
+          - "Common tools installed: {{ install_common_tools }}"
+          - "SSH configured: {{ configure_ssh }}"
+          - "SSH keys added: {{ ssh_public_keys | default([]) | length }}"
+          - "============================================"
+          - "{% if configure_ssh %}SSH is now configured for key-based auth only{% endif %}"
+          - "{% if configure_ssh and (ssh_public_keys | default([]) | length == 0) %}WARNING: No SSH keys added! Add keys before you get locked out.{% endif %}"
+          - "You may need to reboot if kernel was updated"
+          - "============================================"
+
+  handlers:
+    - name: Restart pveproxy
+      ansible.builtin.systemd:
+        name: pveproxy
+        state: restarted
+
+    - name: Restart sshd
+      ansible.builtin.systemd:
+        name: sshd
+        state: restarted

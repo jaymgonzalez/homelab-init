@@ -1,0 +1,390 @@
+---
+# =============================================================================
+# Tailscale Bootstrap Playbook
+# =============================================================================
+# This playbook:
+# 1. Configures VLAN 10 on Proxmox host with NAT for internet access
+# 2. Installs Tailscale on control plane container
+# 3. Configures Tailscale
+# Note: VLAN 10 and NAT rules are kept permanently for container connectivity
+# =============================================================================
+
+- name: Configure VLAN 10 on Proxmox with NAT
+  hosts: proxmox
+  gather_facts: false
+
+  tasks:
+    - name: Check if vmbr0 is VLAN-aware
+      ansible.builtin.shell:
+        cmd: grep -A 10 "iface vmbr0" /etc/network/interfaces | grep "bridge-vlan-aware"
+      register: vlan_aware_check
+      failed_when: false
+      changed_when: false
+
+    - name: Enable VLAN awareness on vmbr0
+      ansible.builtin.lineinfile:
+        path: /etc/network/interfaces
+        insertafter: '^iface vmbr0 inet static'
+        line: '        bridge-vlan-aware yes'
+        state: present
+      when: vlan_aware_check.rc != 0
+
+    - name: Apply network configuration
+      ansible.builtin.command:
+        cmd: ifreload vmbr0
+      when: vlan_aware_check.rc != 0
+      changed_when: true
+
+    - name: Wait for bridge to reinitialize
+      ansible.builtin.pause:
+        seconds: 5
+      when: vlan_aware_check.rc != 0
+
+    - name: Add VLAN 10 to bridge
+      ansible.builtin.command:
+        cmd: bridge vlan add vid 10 dev vmbr0 self
+      failed_when: false
+      changed_when: true
+
+    - name: Create VLAN 10 interface
+      ansible.builtin.command:
+        cmd: ip link add link vmbr0 name vmbr0.10 type vlan id 10
+      failed_when: false
+      changed_when: true
+
+    - name: Bring up VLAN 10 interface
+      ansible.builtin.command:
+        cmd: ip link set vmbr0.10 up
+      changed_when: true
+
+    - name: Add IP address to VLAN 10 interface
+      ansible.builtin.command:
+        cmd: ip addr add 192.168.10.1/24 dev vmbr0.10
+      failed_when: false
+      changed_when: true
+
+    - name: Enable IP forwarding
+      ansible.builtin.command:
+        cmd: sysctl -w net.ipv4.ip_forward=1
+      changed_when: true
+
+    - name: Add NAT rule for VLAN 10
+      ansible.builtin.command:
+        cmd: iptables -t nat -A POSTROUTING -s 192.168.10.0/24 -o vmbr0 -j MASQUERADE
+      changed_when: true
+
+    - name: Allow forwarding from VLAN 10
+      ansible.builtin.command:
+        cmd: iptables -A FORWARD -i vmbr0.10 -o vmbr0 -j ACCEPT
+      changed_when: true
+
+    - name: Allow return traffic to VLAN 10
+      ansible.builtin.command:
+        cmd: iptables -A FORWARD -i vmbr0 -o vmbr0.10 -m state --state RELATED,ESTABLISHED -j ACCEPT
+      changed_when: true
+
+    - name: Check if container 100 is running
+      ansible.builtin.command:
+        cmd: pct status 100
+      register: pct_status
+      changed_when: false
+
+    - name: Start container if not running
+      ansible.builtin.command:
+        cmd: pct start 100
+      when: "'running' not in pct_status.stdout"
+      changed_when: true
+
+    - name: Wait for container to fully boot
+      ansible.builtin.pause:
+        seconds: 1
+
+    - name: Check container network configuration
+      ansible.builtin.command:
+        cmd: pct exec 100 -- ip addr show eth0
+      register: container_ip
+      changed_when: false
+
+    - name: Display container network config
+      ansible.builtin.debug:
+        var: container_ip.stdout_lines
+
+    - name: Verify bridge VLAN configuration
+      ansible.builtin.command:
+        cmd: bridge vlan show dev vmbr0
+      register: bridge_vlan
+      changed_when: false
+      failed_when: false
+
+    - name: Display bridge VLAN info
+      ansible.builtin.debug:
+        var: bridge_vlan.stdout_lines
+
+    - name: Test connectivity to control plane
+      ansible.builtin.command:
+        cmd: ping -c 2 192.168.10.99
+      register: ping_result
+      changed_when: false
+      retries: 3
+      delay: 5
+      until: ping_result.rc == 0
+
+- name: Install and configure Tailscale on control plane
+  hosts: proxmox
+  gather_facts: false
+
+  vars_files:
+    - ../group_vars/all/vault.yml
+
+  vars:
+    tailscale_authkey: "{{ vault_tailscale_authkey | default('') }}"  # Loaded from vault
+    tailscale_args: "--ssh --accept-routes"
+
+  tasks:
+    - name: Install Tailscale in container
+      ansible.builtin.shell:
+        cmd: |
+          pct exec 100 -- bash -c '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq curl ca-certificates
+            curl -fsSL https://tailscale.com/install.sh | sh
+          '
+      changed_when: true
+      async: 300
+      poll: 5
+
+    - name: Enable Tailscale daemon on boot
+      ansible.builtin.command:
+        cmd: pct exec 100 -- systemctl enable tailscaled
+      changed_when: true
+
+    - name: Start Tailscale daemon
+      ansible.builtin.command:
+        cmd: pct exec 100 -- systemctl start tailscaled
+      changed_when: true
+
+    - name: Wait for Tailscale daemon to initialize
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Check Tailscale daemon status
+      ansible.builtin.command:
+        cmd: pct exec 100 -- systemctl status tailscaled
+      register: daemon_status
+      changed_when: false
+      failed_when: false
+
+    - name: Display daemon status
+      ansible.builtin.debug:
+        var: daemon_status.stdout_lines
+
+    - name: Verify tailscaled socket exists
+      ansible.builtin.command:
+        cmd: pct exec 100 -- ls -la /var/run/tailscale/tailscaled.sock
+      register: socket_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display socket status
+      ansible.builtin.debug:
+        msg: "Socket exists: {{ 'Yes' if socket_check.rc == 0 else 'No' }}"
+
+    - name: Get tailscaled logs
+      ansible.builtin.command:
+        cmd: pct exec 100 -- journalctl -u tailscaled -n 20 --no-pager
+      register: tailscaled_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Display tailscaled logs
+      ansible.builtin.debug:
+        var: tailscaled_logs.stdout_lines
+
+    - name: Enable TUN device for container
+      ansible.builtin.command:
+        cmd: pct set 100 --features nesting=1,keyctl=1
+      changed_when: true
+
+    - name: Add TUN device to container
+      ansible.builtin.lineinfile:
+        path: /etc/pve/lxc/100.conf
+        line: 'lxc.cgroup2.devices.allow: c 10:200 rwm'
+        state: present
+
+    - name: Add TUN device mount
+      ansible.builtin.lineinfile:
+        path: /etc/pve/lxc/100.conf
+        line: 'lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file'
+        state: present
+
+    - name: Stop container to apply changes
+      ansible.builtin.command:
+        cmd: pct stop 100
+      changed_when: true
+
+    - name: Wait for container to stop
+      ansible.builtin.pause:
+        seconds: 3
+
+    - name: Start container with TUN device
+      ansible.builtin.command:
+        cmd: pct start 100
+      changed_when: true
+
+    - name: Wait for container to start
+      ansible.builtin.pause:
+        seconds: 10
+
+    - name: Start tailscaled after restart
+      ansible.builtin.command:
+        cmd: pct exec 100 -- systemctl start tailscaled
+      changed_when: true
+
+    - name: Wait for tailscaled to start
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Check if Tailscale is already connected
+      ansible.builtin.command:
+        cmd: pct exec 100 -- tailscale status --json
+      register: tailscale_status
+      failed_when: false
+      changed_when: false
+
+    - name: Debug auth key and status
+      ansible.builtin.debug:
+        msg:
+          - "Auth key present: {{ 'Yes' if tailscale_authkey != '' else 'No' }}"
+          - "Auth key length: {{ tailscale_authkey | length }}"
+          - "Tailscale status RC: {{ tailscale_status.rc }}"
+          - "Will use auth key: {{ (tailscale_authkey != '' and tailscale_status.rc != 0) }}"
+
+    - name: Connect to Tailscale with auth key
+      ansible.builtin.command:
+        cmd: pct exec 100 -- tailscale up {{ tailscale_args }} --authkey={{ tailscale_authkey }}
+      when: tailscale_authkey != ""
+      register: tailscale_up_auth
+      changed_when: true
+      failed_when: false
+
+    - name: Display auth key connection result
+      ansible.builtin.debug:
+        msg:
+          - "Tailscale connection with auth key:"
+          - "Return code: {{ tailscale_up_auth.rc | default('N/A') }}"
+          - "STDOUT: {{ tailscale_up_auth.stdout_lines | default(['No output']) }}"
+          - "STDERR: {{ tailscale_up_auth.stderr_lines | default(['No errors']) }}"
+      when:
+        - tailscale_authkey != ""
+        - tailscale_up_auth is defined
+
+    - name: Fail if auth key connection failed
+      ansible.builtin.fail:
+        msg: "Tailscale connection with auth key failed: {{ tailscale_up_auth.stderr }}"
+      when:
+        - tailscale_authkey != ""
+        - tailscale_up_auth is defined
+        - tailscale_up_auth.rc != 0
+
+    - name: Connect to Tailscale without auth key (manual auth required)
+      ansible.builtin.command:
+        cmd: pct exec 100 -- tailscale up {{ tailscale_args }}
+      when:
+        - tailscale_authkey == ""
+        - tailscale_status.rc != 0
+      register: tailscale_up
+      failed_when: false
+      changed_when: true
+
+    - name: Display Tailscale authentication output
+      ansible.builtin.debug:
+        msg: "{{ tailscale_up.stdout_lines | default([]) + tailscale_up.stderr_lines | default([]) }}"
+      when:
+        - tailscale_authkey == ""
+        - tailscale_up is defined
+
+    - name: Wait for Tailscale authentication
+      ansible.builtin.pause:
+        prompt: |
+
+          ============================================
+          TAILSCALE AUTHENTICATION REQUIRED
+          ============================================
+          Please authenticate Tailscale by visiting the URL shown above.
+          Press ENTER when authentication is complete
+          ============================================
+      when:
+        - tailscale_authkey == ""
+        - tailscale_up is defined
+        - tailscale_up.rc != 0
+
+    - name: Verify Tailscale daemon is running
+      ansible.builtin.command:
+        cmd: pct exec 100 -- systemctl is-active tailscaled
+      register: tailscaled_status
+      changed_when: false
+      failed_when: false
+
+    - name: Display daemon status
+      ansible.builtin.debug:
+        msg: "Tailscaled service status: {{ tailscaled_status.stdout }}"
+
+    - name: Get Tailscale IPv4 address
+      ansible.builtin.command:
+        cmd: pct exec 100 -- tailscale ip -4
+      register: tailscale_ipv4
+      changed_when: false
+
+    - name: Get Tailscale IPv6 address
+      ansible.builtin.command:
+        cmd: pct exec 100 -- tailscale ip -6
+      register: tailscale_ipv6
+      changed_when: false
+      failed_when: false
+
+    - name: Display Tailscale IP addresses
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "Tailscale IPv4: {{ tailscale_ipv4.stdout }}"
+          - "Tailscale IPv6: {{ tailscale_ipv6.stdout | default('Not available') }}"
+          - "============================================"
+          - "Save the IPv4 address above for Ansible inventory!"
+          - "============================================"
+
+    - name: Save Tailscale IP to local file
+      ansible.builtin.copy:
+        content: |
+          # Control Plane Tailscale IP
+          {{ tailscale_ipv4.stdout }}
+        dest: /tmp/control-plane-tailscale-ip.txt
+        mode: '0644'
+      delegate_to: localhost
+
+- name: Final summary
+  hosts: proxmox
+  gather_facts: false
+
+  tasks:
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "TAILSCALE BOOTSTRAP COMPLETE!"
+          - "============================================"
+          - "✓ VLAN 10 configured on Proxmox with NAT"
+          - "✓ Tailscale installed on control plane"
+          - "✓ Control plane accessible via Tailscale"
+          - ""
+          - "Network configuration:"
+          - "  - Container VLAN 10 IP: 192.168.10.99/24"
+          - "  - Proxmox VLAN 10 IP: 192.168.10.1/24"
+          - "  - NAT enabled for internet access"
+          - ""
+          - "Next steps:"
+          - "1. Check /tmp/control-plane-tailscale-ip.txt for the Tailscale IP"
+          - "2. Update ansible/inventory/hosts.yml with the Tailscale IP"
+          - "3. Test: ssh root@<tailscale-ip>"
+          - "4. Run: ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup.yml"
+          - "============================================"

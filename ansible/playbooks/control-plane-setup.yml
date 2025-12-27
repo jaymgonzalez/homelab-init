@@ -1,0 +1,314 @@
+---
+# =============================================================================
+# Control Plane Setup Playbook
+# =============================================================================
+# Configura el LXC control plane con todas las herramientas IaC necesarias
+# =============================================================================
+
+- name: Configure Control Plane LXC
+  hosts: control_plane
+  gather_facts: true
+
+  vars:
+    # Terraform
+    terraform_version: "1.9.8"
+    terraform_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+    # Python/Ansible
+    python_packages:
+      - ansible
+      - ansible-lint
+      - jmespath
+      - proxmoxer
+      - requests
+
+    # System packages
+    system_packages:
+      - git
+      - curl
+      - wget
+      - vim
+      - htop
+      - jq
+      - unzip
+      - gnupg
+      - software-properties-common
+      - apt-transport-https
+      - ca-certificates
+      - python3
+      - python3-pip
+      - python3-venv
+      - openssh-client
+      - tree
+      - tmux
+
+    # Tailscale
+    install_tailscale: true
+    # Set to empty string to skip auto-connection, or provide auth key
+    tailscale_authkey: ""
+    tailscale_args: "--ssh --accept-routes"
+
+    # Git config
+    git_user_name: "IaC Control Plane"
+    git_user_email: "iac@homelab.local"
+
+    # Workspace
+    workspace_dir: /opt/iac
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # System Update
+    # -------------------------------------------------------------------------
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Upgrade all packages
+      ansible.builtin.apt:
+        upgrade: dist
+        autoremove: true
+
+    # -------------------------------------------------------------------------
+    # Install System Packages
+    # -------------------------------------------------------------------------
+    - name: Install system packages
+      ansible.builtin.apt:
+        name: "{{ system_packages }}"
+        state: present
+
+    # -------------------------------------------------------------------------
+    # Install Terraform
+    # -------------------------------------------------------------------------
+    - name: Check if Terraform is installed
+      ansible.builtin.command: terraform version
+      register: terraform_check
+      changed_when: false
+      failed_when: false
+
+    - name: Download Terraform
+      ansible.builtin.get_url:
+        url: "https://releases.hashicorp.com/terraform/{{ terraform_version }}/terraform_{{ terraform_version }}_linux_{{ terraform_arch }}.zip"
+        dest: /tmp/terraform.zip
+        mode: '0644'
+      when: terraform_check.rc != 0 or terraform_version not in terraform_check.stdout
+
+    - name: Extract Terraform
+      ansible.builtin.unarchive:
+        src: /tmp/terraform.zip
+        dest: /usr/local/bin
+        remote_src: true
+        mode: '0755'
+      when: terraform_check.rc != 0 or terraform_version not in terraform_check.stdout
+
+    - name: Verify Terraform installation
+      ansible.builtin.command: terraform version
+      register: terraform_version_output
+      changed_when: false
+
+    - name: Display Terraform version
+      ansible.builtin.debug:
+        msg: "{{ terraform_version_output.stdout }}"
+
+    # -------------------------------------------------------------------------
+    # Install Python/Ansible
+    # -------------------------------------------------------------------------
+    - name: Install pipx
+      ansible.builtin.apt:
+        name: pipx
+        state: present
+
+    - name: Ensure pipx path
+      ansible.builtin.command: pipx ensurepath
+      changed_when: false
+
+    - name: Install Ansible via pipx
+      ansible.builtin.command: pipx install ansible --include-deps
+      args:
+        creates: /root/.local/bin/ansible
+
+    - name: Install additional Ansible dependencies
+      ansible.builtin.pip:
+        name: "{{ item }}"
+        state: present
+        extra_args: --break-system-packages
+      loop:
+        - proxmoxer
+        - requests
+        - jmespath
+
+    # -------------------------------------------------------------------------
+    # Configure Git
+    # -------------------------------------------------------------------------
+    - name: Configure Git user name
+      community.general.git_config:
+        name: user.name
+        value: "{{ git_user_name }}"
+        scope: global
+
+    - name: Configure Git user email
+      community.general.git_config:
+        name: user.email
+        value: "{{ git_user_email }}"
+        scope: global
+
+    - name: Configure Git default branch
+      community.general.git_config:
+        name: init.defaultBranch
+        value: main
+        scope: global
+
+    # -------------------------------------------------------------------------
+    # Generate SSH Key
+    # -------------------------------------------------------------------------
+    - name: Check if SSH key exists
+      ansible.builtin.stat:
+        path: /root/.ssh/id_ed25519
+      register: ssh_key
+
+    - name: Generate SSH key
+      ansible.builtin.command: ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -C "control-plane@homelab"
+      when: not ssh_key.stat.exists
+
+    - name: Read SSH public key
+      ansible.builtin.slurp:
+        src: /root/.ssh/id_ed25519.pub
+      register: ssh_public_key
+
+    - name: Display SSH public key
+      ansible.builtin.debug:
+        msg:
+          - "SSH Public Key (add this to your Git provider and PVE authorized_keys):"
+          - "{{ ssh_public_key.content | b64decode }}"
+
+    # -------------------------------------------------------------------------
+    # Create Workspace
+    # -------------------------------------------------------------------------
+    - name: Create IaC workspace directory
+      ansible.builtin.file:
+        path: "{{ workspace_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create workspace subdirectories
+      ansible.builtin.file:
+        path: "{{ workspace_dir }}/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - terraform
+        - ansible
+        - scripts
+        - secrets
+
+    # -------------------------------------------------------------------------
+    # Add useful aliases
+    # -------------------------------------------------------------------------
+    - name: Add useful aliases to bashrc
+      ansible.builtin.blockinfile:
+        path: /root/.bashrc
+        block: |
+          # IaC Aliases
+          alias tf='terraform'
+          alias tfi='terraform init'
+          alias tfp='terraform plan'
+          alias tfa='terraform apply'
+          alias tfd='terraform destroy'
+          alias tfv='terraform validate'
+          alias ap='ansible-playbook'
+          alias al='ansible-lint'
+
+          # Workspace
+          export IAC_HOME={{ workspace_dir }}
+          alias iac='cd $IAC_HOME'
+
+          # Git
+          alias gs='git status'
+          alias gd='git diff'
+          alias gl='git log --oneline -10'
+          alias gp='git pull'
+
+          # Tailscale
+          alias ts='tailscale'
+          alias tss='tailscale status'
+        marker: "# {mark} ANSIBLE MANAGED - IaC ALIASES"
+
+    # -------------------------------------------------------------------------
+    # Install Tailscale
+    # -------------------------------------------------------------------------
+    - name: Add Tailscale GPG key
+      ansible.builtin.get_url:
+        url: https://pkgs.tailscale.com/stable/debian/{{ ansible_distribution_release }}.noarmor.gpg
+        dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+        mode: '0644'
+      when: install_tailscale
+
+    - name: Add Tailscale repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/debian {{ ansible_distribution_release }} main"
+        filename: tailscale
+        state: present
+      when: install_tailscale
+
+    - name: Install Tailscale
+      ansible.builtin.apt:
+        name: tailscale
+        state: present
+        update_cache: true
+      when: install_tailscale
+
+    - name: Enable and start Tailscale service
+      ansible.builtin.systemd:
+        name: tailscaled
+        enabled: true
+        state: started
+      when: install_tailscale
+
+    - name: Connect to Tailscale (with authkey)
+      ansible.builtin.command: "tailscale up {{ tailscale_args }} --authkey={{ tailscale_authkey }}"
+      when:
+        - install_tailscale
+        - tailscale_authkey != ""
+      register: tailscale_up
+      changed_when: "'Success' in tailscale_up.stdout or tailscale_up.rc == 0"
+      failed_when: false
+
+    - name: Get Tailscale status
+      ansible.builtin.command: tailscale status
+      register: tailscale_status
+      changed_when: false
+      failed_when: false
+      when: install_tailscale
+
+    - name: Display Tailscale connection instructions
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "Tailscale Installation Complete"
+          - "============================================"
+          - "{% if tailscale_authkey == '' %}To connect to Tailscale, run:{% endif %}"
+          - "{% if tailscale_authkey == '' %}  tailscale up {{ tailscale_args }}{% endif %}"
+          - "{% if tailscale_authkey == '' %}Then authenticate via the URL provided{% endif %}"
+          - "{% if tailscale_authkey != '' %}Status: {{ tailscale_status.stdout_lines[0] if tailscale_status.stdout_lines else 'Connected' }}{% endif %}"
+      when: install_tailscale
+
+    # -------------------------------------------------------------------------
+    # Summary
+    # -------------------------------------------------------------------------
+    - name: Installation summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "Control Plane Setup Complete!"
+          - "============================================"
+          - "Terraform: {{ terraform_version_output.stdout_lines[0] }}"
+          - "Ansible: installed via pipx"
+          - "Tailscale: {{ 'installed' if install_tailscale else 'skipped' }}"
+          - "Workspace: {{ workspace_dir }}"
+          - "============================================"
+          - "Next steps:"
+          - "1. Add the SSH key above to your Git provider"
+          - "2. Add the SSH key to PVE's authorized_keys"
+          - "{% if install_tailscale and tailscale_authkey == '' %}3. Connect to Tailscale: tailscale up {{ tailscale_args }}{% endif %}"
+          - "{% if install_tailscale and tailscale_authkey == '' %}4. Clone your IaC repo to {{ workspace_dir }}{% else %}3. Clone your IaC repo to {{ workspace_dir }}{% endif %}"
+          - "============================================"

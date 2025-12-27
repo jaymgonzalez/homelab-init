@@ -1,0 +1,259 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+Proxmox Infrastructure as Code bootstrap project for setting up a Proxmox VE homelab from scratch. The architecture follows a two-stage approach:
+
+1. **PVE Host Setup**: Ansible configures the Proxmox host (disables enterprise repos, enables no-subscription repos, installs utilities)
+2. **Control Plane LXC**: Terraform creates a privileged LXC container that serves as the IaC control center, equipped with Terraform, Ansible, Git, and SSH keys
+
+The control plane LXC is the central management node from which all future infrastructure deployments are managed.
+
+## Workflow
+
+The standard bootstrap workflow:
+
+```bash
+# 1. Prepare the PVE host (from local machine)
+cd ansible
+ansible-playbook -i inventory/hosts.yml playbooks/pve-post-install.yml
+
+# 2. Create the control plane LXC (from local machine)
+cd terraform/control-plane
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your values
+terraform init
+terraform plan
+terraform apply
+
+# 3. Configure the control plane (from local machine)
+cd ansible
+ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup.yml
+
+# 4. Use the control plane (SSH into it)
+ssh root@<control-plane-ip>
+```
+
+Alternatively, use the guided bootstrap script: `./scripts/bootstrap.sh`
+
+## Terraform
+
+**Provider**: Telmate/proxmox ~> 3.0
+**Required Version**: >= 1.9.5
+
+### Common Commands
+
+```bash
+cd terraform/control-plane
+terraform init
+terraform validate
+terraform plan
+terraform apply
+terraform destroy
+terraform output  # View outputs like SSH command, IP address
+```
+
+### Authentication
+
+Uses Proxmox API tokens (not username/password). Create token in Proxmox UI:
+- Datacenter → Permissions → API Tokens
+- Add: User=root@pam, Token ID=terraform
+- **Must uncheck "Privilege Separation"** for full access
+
+### Key Configuration Points
+
+- **LXC is privileged** (`unprivileged = false`) to support Docker if needed
+- **Features enabled**: `nesting = true` (for Docker), `keyctl = true`
+- **Auto-provisioning**: `null_resource.run_ansible` optionally triggers Ansible playbook after creation
+- **IP extraction**: `local.control_plane_ip_clean` strips CIDR notation from IP variable
+
+## Ansible
+
+### Common Commands
+
+```bash
+cd ansible
+
+# Run specific playbook
+ansible-playbook -i inventory/hosts.yml playbooks/pve-post-install.yml
+ansible-playbook -i inventory/hosts.yml playbooks/control-plane-setup.yml
+
+# Run against single host
+ansible-playbook -i "192.168.1.10," -u root playbooks/control-plane-setup.yml
+
+# Check connectivity
+ansible all -i inventory/hosts.yml -m ping
+```
+
+### Inventory Structure
+
+Located in `ansible/inventory/hosts.yml`:
+- **proxmox** group: PVE hosts
+- **control_plane** group: Control plane LXC(s)
+- Default user: root
+- Python interpreter: /usr/bin/python3
+
+### Playbooks
+
+**pve-post-install.yml** (runs on Proxmox host):
+- Disables enterprise repos
+- Enables no-subscription repos
+- Removes subscription nag popup
+- Installs common utilities (vim, htop, git, tmux, etc.)
+- Adds SSH public keys to authorized_keys
+- Configures SSH (key-based only, disables root password login)
+- Based on tteck's Proxmox helper scripts
+
+**IMPORTANT**: Add your SSH public keys before running this playbook to avoid getting locked out when password authentication is disabled.
+
+**control-plane-setup.yml** (runs on control plane LXC):
+- Installs Terraform (version 1.9.8 by default)
+- Installs Ansible via pipx with dependencies (proxmoxer, requests, jmespath)
+- Configures Git (user, email, default branch)
+- Generates ED25519 SSH key for the control plane
+- Creates workspace at `/opt/iac` with subdirectories (terraform, ansible, scripts, secrets)
+- Installs Tailscale VPN for secure remote access
+- Adds useful bash aliases (tf, tfi, tfp, tfa, ap, al, ts, tss, etc.)
+
+## Tailscale Integration
+
+The control plane includes Tailscale for secure remote access to your homelab.
+
+### Configuration
+
+Tailscale installation is controlled by variables in `control-plane-setup.yml`:
+
+```yaml
+install_tailscale: true  # Set to false to skip Tailscale
+tailscale_authkey: ""    # Leave empty for manual auth, or provide auth key
+tailscale_args: "--ssh --accept-routes"  # Default arguments for tailscale up
+```
+
+### Manual Connection (no auth key)
+
+If `tailscale_authkey` is empty, after the playbook completes:
+
+```bash
+ssh root@<control-plane-ip>
+tailscale up --ssh --accept-routes
+# Follow the URL to authenticate
+```
+
+### Automatic Connection (with auth key)
+
+1. Generate auth key in Tailscale admin console (Settings → Keys)
+2. Set `tailscale_authkey` variable before running playbook
+3. Control plane will auto-connect to your tailnet
+
+### Tailscale Features Enabled
+
+- `--ssh`: Enables Tailscale SSH (access control plane via Tailscale)
+- `--accept-routes`: Accepts subnet routes from other Tailscale nodes
+
+### Common Commands
+
+```bash
+tailscale status         # or: tss
+tailscale ping <node>
+tailscale ip
+tailscale logout
+```
+
+## Architecture Details
+
+### Control Plane LXC Specifications
+
+- **Purpose**: Central IaC management node
+- **Container Type**: Privileged (to support Docker)
+- **Default Resources**: 2 cores, 2GB RAM, 512MB swap, 20GB disk
+- **Storage**: Uses `local-lvm` by default
+- **Network**: Static IP via bridge `vmbr0`, configurable VLAN support
+- **Features**: Nesting enabled (Docker support), keyctl enabled
+
+### Network Configuration
+
+- Control plane uses static IP in CIDR format (e.g., `192.168.1.10/24`)
+- Gateway and nameserver configurable
+- VLAN support via `vlan_tag` variable (set to `-1` to disable)
+
+### Post-Bootstrap Next Steps
+
+After control plane is configured, typical next deployments mentioned in README:
+- GitLab (self-hosted Git)
+- Vault (secrets management)
+- Home Assistant (home automation)
+- Traefik/Nginx (reverse proxy)
+- Monitoring stack (Prometheus + Grafana)
+
+## SSH Key Configuration
+
+### Adding SSH Keys to Proxmox Host
+
+The PVE post-install playbook will add your SSH public keys and disable password authentication. Configure this in one of two ways:
+
+**Option 1: In the inventory file** (`ansible/inventory/hosts.yml`):
+
+```yaml
+proxmox:
+  hosts:
+    pve:
+      ansible_host: 192.168.1.10
+      ssh_public_keys:
+        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@laptop"
+        - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABA... user@desktop"
+```
+
+**Option 2: In the playbook** (`ansible/playbooks/pve-post-install.yml`):
+
+```yaml
+vars:
+  ssh_public_keys:
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@laptop"
+```
+
+**Getting your public key:**
+
+```bash
+cat ~/.ssh/id_ed25519.pub
+# or
+cat ~/.ssh/id_rsa.pub
+```
+
+The playbook will:
+1. Create `/root/.ssh` directory with proper permissions (700)
+2. Add keys to `/root/.ssh/authorized_keys` with proper permissions (600)
+3. Set `PermitRootLogin prohibit-password` in sshd_config
+4. Enable `PubkeyAuthentication yes`
+5. Restart SSH daemon
+
+**WARNING**: The playbook will show a warning if SSH is configured but no keys are added. Make sure to add at least one SSH key before running to avoid getting locked out.
+
+## Configuration Files
+
+### terraform.tfvars
+
+Create from `terraform.tfvars.example`. Critical variables:
+- `proxmox_host`: IP/hostname of PVE
+- `proxmox_api_token_id`: Format `user@realm!tokenid`
+- `proxmox_api_token_secret`: Token secret from Proxmox UI
+- `control_plane_ip`: CIDR format IP for control plane
+- `gateway`: Network gateway
+- `ssh_public_keys`: SSH keys to add to control plane (supports multiple keys)
+- `root_password`: Container root password
+
+### inventory/hosts.yml
+
+Update `ansible_host` values for your environment:
+- `pve`: Your Proxmox host IP
+- `control`: Your control plane LXC IP
+
+## Important Notes
+
+- The bootstrap process requires Terraform and Ansible on your **local machine** for initial setup
+- Proxmox VE 8.x is expected
+- Ubuntu 24.04 LXC template must be downloaded to PVE before running Terraform (`pveam download local ubuntu-24.04-standard_24.04-2_amd64.tar.zst`)
+- Control plane SSH key is auto-generated and displayed during setup - add it to Git provider and PVE authorized_keys
+- The workspace directory on control plane is `/opt/iac` with the `$IAC_HOME` environment variable
+- Terraform state is local by default (consider remote backend for production)
