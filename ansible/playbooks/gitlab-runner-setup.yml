@@ -6,7 +6,7 @@
 # =============================================================================
 
 - name: Install GitLab Runner on Control Plane
-  hosts: control_plane
+  hosts: localhost
   gather_facts: true
 
   vars:
