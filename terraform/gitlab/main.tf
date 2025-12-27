@@ -11,7 +11,7 @@ resource "proxmox_lxc" "gitlab" {
   vmid         = var.gitlab_vmid
   ostemplate   = var.template
   password     = var.root_password
-  unprivileged = true
+  unprivileged = false
 
   cores  = var.gitlab_cores
   memory = var.gitlab_memory
