@@ -191,7 +191,7 @@
 
     - name: Connect to Tailscale with auth key
       ansible.builtin.command:
-        cmd: pct exec 100 -- tailscale up {{ tailscale_args }} --authkey={{ tailscale_authkey }}
+        cmd: pct exec 100 -- tailscale up --advertise-routes=192.168.10.0/24 --accept-routes --ssh --authkey={{ tailscale_authkey }}
       register: tailscale_up_auth
       changed_when: true
 
