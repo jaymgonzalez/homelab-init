@@ -1,0 +1,10 @@
+---
+# =============================================================================
+# Common Variables for All Hosts
+# =============================================================================
+
+# SSH Public Keys - Centralized list to avoid duplication
+# These keys will be added to all infrastructure hosts
+common_ssh_public_keys:
+  - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCouRsnZwzAf/MQGTeopeu770tbNQDRK5bmkJw8IghKe3aqxSSjiYZunv28y64lc98HkRPrQM1FIcxrrmXllRtY6EQsfEVEoRpHrT+SoOdl8P/NNSrr7VtXUUQXDRal+zNh1xi+kAb90egBf7JWugBFwn4aHDhDbBGcpyC1bzkgYoOYj5iZoWOfISV2gQ4PJe8KSJa3NjmonBIFd+bC3FKCw2oJfs40/PyIVc6qLcVwjYzG86p+coKZ2aHfU8AxuwqYGqrTLrfxvgwH3p7a9oPZt26Fsqijh3kWiGtwHKJzd/am9Gfy6Wn13gcAlgIWs/yaCpK8Gu4mws8hAU5pfhucI0nY2IDZLKrjDBkWCi513XoQxa0sUZeGmD/O14bIzoMx2rM5HDKLbsvNNbs1WtDMZAWtszxlow78n5cwupfZjtXtCSyk4pKxQXKTn2Vl5XhDo/OYKrScIMJxjbfTUOyWrFIP0xpY0wWUCcOsP8K83l60SDP3e6++RZFfew5FmsU= sornor@litel"
+  - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOWeJQ7jf2DFu5Xo3i/3mEiPeZqcfqrBsDvHes8avYem control-plane@homelab"

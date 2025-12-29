@@ -90,10 +90,16 @@ ansible all -i inventory/hosts.yml -m ping
 ### Inventory Structure
 
 Located in `ansible/inventory/hosts.yml`:
-- **proxmox** group: PVE hosts
+- **proxmox** group: PVE hosts (supports multiple nodes in a cluster)
 - **control_plane** group: Control plane LXC(s)
+- **qdevice** group: Quorum device for cluster HA
+- **gitlab** group: GitLab CE server
 - Default user: root
 - Python interpreter: /usr/bin/python3
+
+**Common variables** in `ansible/group_vars/all/`:
+- `common.yml`: Shared SSH keys and other common configuration
+- `vault.yml`: Encrypted secrets (API tokens, passwords, etc.)
 
 ### Playbooks
 
@@ -116,6 +122,93 @@ Located in `ansible/inventory/hosts.yml`:
 - Creates workspace at `/opt/iac` with subdirectories (terraform, ansible, scripts, secrets)
 - Installs Tailscale VPN for secure remote access
 - Adds useful bash aliases (tf, tfi, tfp, tfa, ap, al, ts, tss, etc.)
+
+**qdevice-setup.yml** (runs on QDevice - Raspberry Pi or similar):
+- Updates system packages
+- Installs corosync-qnetd package
+- Configures SSH keys for secure access
+- Enables and starts corosync-qnetd service
+- **Note**: Supports Cloudflare Tunnel access (see `docs/CLOUDFLARE_TUNNEL.md`)
+
+**qdevice-cluster-setup.yml** (runs on first Proxmox node):
+- Checks cluster status and prerequisites
+- Configures the QDevice on the Proxmox cluster
+- Verifies QDevice connectivity and status
+
+## Proxmox Cluster Setup
+
+### Creating a 2-Node Cluster
+
+**On the first node** (e.g., pve-main):
+```bash
+pvecm create homelab-cluster
+```
+
+**On the second node** (e.g., pve-mini):
+```bash
+pvecm add <IP-of-first-node>
+# Enter root password when prompted
+# Accept the certificate fingerprint
+```
+
+**Verify cluster status** (on either node):
+```bash
+pvecm status
+pvecm nodes
+```
+
+### Quorum Device (QDevice) Setup
+
+A 2-node cluster requires both nodes online for quorum. Adding a QDevice (lightweight third "vote") enables the cluster to maintain quorum with only one node online, providing true high availability.
+
+**Requirements:**
+- A third device (Raspberry Pi, old laptop, small VM, or VPS)
+- Debian or Ubuntu OS
+- Network connectivity to both Proxmox nodes
+
+**Setup workflow:**
+
+```bash
+# 1. Update inventory with your Raspberry Pi IP
+# Edit ansible/inventory/hosts.yml and set qdevice ansible_host
+
+# 2. Setup the QDevice (installs corosync-qnetd)
+cd ansible
+ansible-playbook -i inventory/hosts.yml playbooks/qdevice-setup.yml
+
+# 3. Configure QDevice on cluster (from one PVE node)
+ansible-playbook -i inventory/hosts.yml playbooks/qdevice-cluster-setup.yml
+
+# 4. Verify QDevice status (on any PVE node)
+pvecm status  # Should show Qdevice information
+corosync-qdevice-tool -s  # Detailed QDevice status
+```
+
+**After QDevice setup:**
+- Cluster has 3 votes total (node1 + node2 + qdevice)
+- Quorum requires 2 votes
+- Either Proxmox node can be shut down without losing quorum
+- Cluster operations remain available with one node offline
+
+**Important notes:**
+- QDevice doesn't run VMs/containers, it only provides a vote
+- Very lightweight resource requirements (~512MB RAM is sufficient)
+- Critical for planned maintenance on 2-node clusters
+- Without QDevice, both nodes must be online for cluster operations
+
+### Deploying Resources Across Nodes
+
+With a cluster configured, specify which node to deploy resources to:
+
+```hcl
+# In Terraform modules
+resource "proxmox_lxc" "example" {
+  target_node = "pve-mini"  # Deploy to specific node
+  # ... rest of config
+}
+```
+
+The control plane Terraform provider connects to the cluster API (via any node) and can deploy to any cluster member.
 
 ## Tailscale Integration
 
@@ -189,29 +282,32 @@ After control plane is configured, typical next deployments mentioned in README:
 
 ## SSH Key Configuration
 
-### Adding SSH Keys to Proxmox Host
+### Centralized SSH Key Management
 
-The PVE post-install playbook will add your SSH public keys and disable password authentication. Configure this in one of two ways:
-
-**Option 1: In the inventory file** (`ansible/inventory/hosts.yml`):
+SSH public keys are managed centrally in `ansible/group_vars/all/common.yml` to avoid duplication:
 
 ```yaml
+# ansible/group_vars/all/common.yml
+common_ssh_public_keys:
+  - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@laptop"
+  - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABA... user@desktop"
+```
+
+The inventory file references this variable:
+
+```yaml
+# ansible/inventory/hosts.yml
 proxmox:
   hosts:
-    pve:
+    pve-main:
       ansible_host: 192.168.1.10
-      ssh_public_keys:
-        - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@laptop"
-        - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABA... user@desktop"
+      ssh_public_keys: "{{ common_ssh_public_keys }}"
 ```
 
-**Option 2: In the playbook** (`ansible/playbooks/pve-post-install.yml`):
-
-```yaml
-vars:
-  ssh_public_keys:
-    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@laptop"
-```
+**Benefits:**
+- Define keys once, use everywhere
+- Easy to add/remove keys across all infrastructure
+- No duplication in inventory file
 
 **Getting your public key:**
 
@@ -219,6 +315,18 @@ vars:
 cat ~/.ssh/id_ed25519.pub
 # or
 cat ~/.ssh/id_rsa.pub
+```
+
+**Per-host override (optional):**
+
+If you need host-specific keys, override in the inventory:
+
+```yaml
+pve-main:
+  ansible_host: 192.168.1.10
+  ssh_public_keys:
+    - "{{ common_ssh_public_keys }}"  # Include common keys
+    - "ssh-ed25519 AAAAC3... special-key@host"  # Plus host-specific key
 ```
 
 The playbook will:
@@ -246,8 +354,11 @@ Create from `terraform.tfvars.example`. Critical variables:
 ### inventory/hosts.yml
 
 Update `ansible_host` values for your environment:
-- `pve`: Your Proxmox host IP
-- `control`: Your control plane LXC IP
+- `pve-main`: First Proxmox node IP (e.g., 192.168.1.10)
+- `pve-mini`: Second Proxmox node IP (e.g., 192.168.1.11) - if using cluster
+- `control`: Control plane LXC IP
+- `qdevice`: QDevice IP (e.g., 192.168.1.20) - if using cluster with QDevice
+- `gitlab`: GitLab server IP - if deployed
 
 ## Important Notes
 

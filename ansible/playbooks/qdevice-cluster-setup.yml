@@ -1,0 +1,152 @@
+---
+# =============================================================================
+# QDevice Cluster Setup Playbook
+# =============================================================================
+# Configures the Proxmox cluster to use the QDevice
+# Run this AFTER setting up the QDevice with qdevice-setup.yml
+# =============================================================================
+
+- name: Install Prerequisites on All Cluster Nodes
+  hosts: proxmox
+  gather_facts: false
+
+  tasks:
+    - name: Install corosync-qdevice package on all nodes
+      ansible.builtin.apt:
+        name: corosync-qdevice
+        state: present
+        update_cache: true
+
+    - name: Clean up existing QDevice certificate stores
+      ansible.builtin.file:
+        path: /etc/corosync/qdevice/net/nssdb
+        state: absent
+      failed_when: false
+
+- name: Configure QDevice on Proxmox Cluster
+  hosts: pve-main  # Run setup on the first node only
+  gather_facts: true
+
+  vars:
+    # QDevice configuration - will be read from inventory
+    qdevice_host: "{{ hostvars['qdevice']['ansible_host'] }}"
+
+  tasks:
+
+    # -------------------------------------------------------------------------
+    # Pre-flight Checks
+    # -------------------------------------------------------------------------
+    - name: Check if running on Proxmox VE
+      ansible.builtin.stat:
+        path: /etc/pve
+      register: pve_check
+
+    - name: Fail if not Proxmox
+      ansible.builtin.fail:
+        msg: "This playbook must run on a Proxmox VE node"
+      when: not pve_check.stat.exists
+
+    - name: Check cluster status
+      ansible.builtin.command: pvecm status
+      register: cluster_status
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if not in a cluster
+      ansible.builtin.fail:
+        msg: "This node is not part of a Proxmox cluster. Create a cluster first with 'pvecm create <name>'"
+      when: cluster_status.rc != 0
+
+    - name: Display cluster status
+      ansible.builtin.debug:
+        var: cluster_status.stdout_lines
+
+    # -------------------------------------------------------------------------
+    # Check if QDevice is already configured
+    # -------------------------------------------------------------------------
+    - name: Check current QDevice status
+      ansible.builtin.command: pvecm status
+      register: qdevice_check
+      changed_when: false
+      failed_when: false
+
+    - name: Parse QDevice status
+      ansible.builtin.set_fact:
+        qdevice_configured: "{{ 'Qdevice' in qdevice_check.stdout }}"
+
+    # -------------------------------------------------------------------------
+    # Configure QDevice
+    # -------------------------------------------------------------------------
+    - name: Display QDevice configuration info
+      ansible.builtin.debug:
+        msg:
+          - "QDevice Host: {{ qdevice_host }}"
+          - "QDevice already configured: {{ qdevice_configured }}"
+
+    - name: Clean up QDevice certificate database
+      ansible.builtin.command: "ssh root@{{ qdevice_host }} 'rm -rf /etc/corosync/qnetd/nssdb'"
+      when: not qdevice_configured
+      failed_when: false
+      changed_when: false
+
+    - name: Setup QDevice on cluster
+      ansible.builtin.command: "pvecm qdevice setup {{ qdevice_host }}"
+      register: qdevice_setup
+      when: not qdevice_configured
+      changed_when: true
+
+    - name: Display QDevice setup output
+      ansible.builtin.debug:
+        var: qdevice_setup.stdout_lines
+      when: not qdevice_configured
+
+    - name: Skip QDevice setup (already configured)
+      ansible.builtin.debug:
+        msg: "QDevice is already configured, skipping setup"
+      when: qdevice_configured
+
+    # -------------------------------------------------------------------------
+    # Verify QDevice Status
+    # -------------------------------------------------------------------------
+    - name: Wait for QDevice to be fully configured
+      ansible.builtin.pause:
+        seconds: 5
+      when: not qdevice_configured
+
+    - name: Get updated cluster status
+      ansible.builtin.command: pvecm status
+      register: final_status
+      changed_when: false
+
+    - name: Display final cluster status
+      ansible.builtin.debug:
+        var: final_status.stdout_lines
+
+    - name: Get QDevice status details
+      ansible.builtin.command: corosync-qdevice-tool -s
+      register: qdevice_tool
+      changed_when: false
+      failed_when: false
+
+    - name: Display QDevice tool output
+      ansible.builtin.debug:
+        var: qdevice_tool.stdout_lines
+      when: qdevice_tool.rc == 0
+
+    # -------------------------------------------------------------------------
+    # Summary
+    # -------------------------------------------------------------------------
+    - name: QDevice cluster setup summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "Proxmox QDevice Cluster Setup Complete!"
+          - "============================================"
+          - "QDevice Host: {{ qdevice_host }}"
+          - "Status: {% if not qdevice_configured %}Newly configured{% else %}Already configured{% endif %}"
+          - "============================================"
+          - "Your 2-node cluster now has quorum redundancy!"
+          - "You can now safely shutdown one node without losing quorum."
+          - "============================================"
+          - "Verify with: pvecm status"
+          - "============================================"

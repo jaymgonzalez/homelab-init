@@ -1,0 +1,162 @@
+---
+# =============================================================================
+# QDevice Setup Playbook
+# =============================================================================
+# Sets up a Raspberry Pi (or other Debian/Ubuntu device) as a Proxmox
+# Quorum Device to enable HA in a 2-node cluster
+# =============================================================================
+
+- name: Setup Proxmox Quorum Device (QDevice)
+  hosts: qdevice
+  gather_facts: true
+
+  vars_files:
+    - ../group_vars/all/common.yml
+
+  vars:
+    # Configuration
+    update_system: true
+    configure_ssh: true
+    install_utilities: true
+
+    # Common utilities for QDevice
+    common_packages:
+      - vim
+      - htop
+      - curl
+      - net-tools
+
+  tasks:
+    # -------------------------------------------------------------------------
+    # System Requirements Check
+    # -------------------------------------------------------------------------
+    - name: Check if running Debian/Ubuntu
+      ansible.builtin.fail:
+        msg: "This playbook requires Debian or Ubuntu ({{ ansible_facts['distribution'] }} detected)"
+      when: ansible_facts['distribution'] not in ['Debian', 'Ubuntu']
+
+    - name: Display OS information
+      ansible.builtin.debug:
+        msg: "Setting up QDevice on {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}"
+
+    # -------------------------------------------------------------------------
+    # Update System
+    # -------------------------------------------------------------------------
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: update_system
+
+    - name: Upgrade all packages
+      ansible.builtin.apt:
+        upgrade: dist
+        autoremove: true
+        autoclean: true
+      when: update_system
+      register: upgrade_result
+
+    - name: Display upgrade results
+      ansible.builtin.debug:
+        msg: "System upgraded successfully"
+      when: update_system
+
+    # -------------------------------------------------------------------------
+    # Install Utilities
+    # -------------------------------------------------------------------------
+    - name: Install common utilities
+      ansible.builtin.apt:
+        name: "{{ common_packages }}"
+        state: present
+      when: install_utilities
+
+    # -------------------------------------------------------------------------
+    # Install Corosync QNetd
+    # -------------------------------------------------------------------------
+    - name: Install corosync-qnetd package
+      ansible.builtin.apt:
+        name: corosync-qnetd
+        state: present
+
+    - name: Ensure corosync-qnetd service is enabled and started
+      ansible.builtin.systemd:
+        name: corosync-qnetd
+        enabled: true
+        state: started
+
+    - name: Get corosync-qnetd status
+      ansible.builtin.systemd:
+        name: corosync-qnetd
+      register: qnetd_status
+
+    - name: Display QNetd status
+      ansible.builtin.debug:
+        msg: "corosync-qnetd is {{ qnetd_status.status.ActiveState }}"
+
+    # -------------------------------------------------------------------------
+    # SSH Configuration
+    # -------------------------------------------------------------------------
+    - name: Ensure .ssh directory exists
+      ansible.builtin.file:
+        path: /root/.ssh
+        state: directory
+        mode: '0700'
+        owner: root
+        group: root
+      when: configure_ssh
+
+    - name: Add SSH public keys to authorized_keys
+      ansible.builtin.lineinfile:
+        path: /root/.ssh/authorized_keys
+        line: "{{ item }}"
+        create: true
+        mode: '0600'
+        owner: root
+        group: root
+      loop: "{{ ssh_public_keys | default([]) }}"
+      when:
+        - configure_ssh
+        - ssh_public_keys is defined
+        - ssh_public_keys | length > 0
+
+    - name: Configure SSH - Disable root password login (keep key-based)
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PermitRootLogin'
+        line: 'PermitRootLogin prohibit-password'
+      when: configure_ssh
+      notify: Restart sshd
+
+    - name: Configure SSH - Enable PubkeyAuthentication
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PubkeyAuthentication'
+        line: 'PubkeyAuthentication yes'
+      when: configure_ssh
+      notify: Restart sshd
+
+    # -------------------------------------------------------------------------
+    # Summary
+    # -------------------------------------------------------------------------
+    - name: QDevice setup summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "Proxmox QDevice Setup Complete!"
+          - "============================================"
+          - "Hostname: {{ ansible_facts['hostname'] }}"
+          - "IP Address: {{ ansible_default_ipv4.address | default('N/A (Cloudflare Tunnel)') }}"
+          - "OS: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}"
+          - "corosync-qnetd: {{ qnetd_status.status.ActiveState }}"
+          - "System updated: {{ update_system }}"
+          - "SSH configured: {{ configure_ssh }}"
+          - "SSH keys added: {{ ssh_public_keys | default([]) | length }}"
+          - "============================================"
+          - "Next step: Run qdevice-cluster-setup.yml to add this QDevice to your Proxmox cluster"
+          - "============================================"
+
+  handlers:
+    - name: Restart sshd
+      ansible.builtin.systemd:
+        name: sshd
+        state: restarted
