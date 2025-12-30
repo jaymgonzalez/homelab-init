@@ -360,11 +360,97 @@ Update `ansible_host` values for your environment:
 - `qdevice`: QDevice IP (e.g., 192.168.1.20) - if using cluster with QDevice
 - `gitlab`: GitLab server IP - if deployed
 
+## GitLab Integration
+
+This project uses GitLab for source control and Terraform state storage.
+
+### GitLab Project Management
+
+The `terraform/gitlab-config` module manages GitLab resources using the GitLab provider:
+- Creates the `proxmox-iac` project
+- Configures project settings (visibility, features, etc.)
+- Provides outputs for Git URLs and Terraform state backend URLs
+
+**Setup:**
+```bash
+cd terraform/gitlab-config
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with GitLab URL and token
+terraform init
+terraform apply
+```
+
+### Terraform State Storage
+
+All Terraform modules use GitLab's HTTP backend for state storage:
+- **control-plane**: State stored at `/api/v4/projects/1/terraform/state/control-plane`
+- **gitlab**: State stored at `/api/v4/projects/1/terraform/state/gitlab`
+- **gitlab-config**: State stored at `/api/v4/projects/1/terraform/state/gitlab-config`
+
+**Benefits:**
+- Centralized state management in GitLab
+- Automatic state locking (prevents concurrent modifications)
+- State versioning and history in GitLab UI
+- No local `.tfstate` files to manage
+
+**Backend Configuration:**
+
+Each module has:
+- `backend.tf` - Defines the HTTP backend (checked into Git)
+- `backend.hcl` - Contains credentials (gitignored, never committed)
+- `backend.hcl.example` - Template for creating `backend.hcl`
+
+**Initialize with GitLab backend:**
+```bash
+cd terraform/<module-name>
+cp backend.hcl.example backend.hcl
+# Edit backend.hcl with your GitLab credentials
+terraform init -backend-config=backend.hcl
+```
+
+**Migrate existing state:**
+```bash
+# Backup first!
+cp terraform.tfstate terraform.tfstate.backup-$(date +%Y%m%d)
+
+# Initialize with new backend (Terraform will detect migration)
+terraform init -backend-config=backend.hcl
+# Answer "yes" when prompted to copy state
+
+# Verify
+terraform state list
+```
+
+**Automated migration script:**
+```bash
+./scripts/migrate-state-to-gitlab.sh
+```
+
+See `terraform/MIGRATION_GUIDE.md` for detailed migration instructions.
+
+### Git Remotes
+
+The repository is hosted in GitLab:
+- **GitLab**: `git@192.168.10.101:root/proxmox-iac.git` (primary, SSH)
+- **GitHub**: Original bootstrap repo (not actively maintained)
+
+**Common Git operations:**
+```bash
+# Push to GitLab
+git push gitlab main
+
+# View remotes
+git remote -v
+
+# Add SSH key to GitLab (Settings → SSH Keys)
+cat ~/.ssh/id_ed25519.pub
+```
+
 ## Important Notes
 
 - The bootstrap process requires Terraform and Ansible on your **local machine** for initial setup
 - Proxmox VE 8.x is expected
 - Debian 13 LXC template must be downloaded to PVE before running Terraform (`pveam download local debian-13-standard_13.1-2_amd64.tar.zst`)
-- Control plane SSH key is auto-generated and displayed during setup - add it to Git provider and PVE authorized_keys
+- Control plane SSH key is auto-generated and displayed during setup - add it to GitLab SSH keys and PVE authorized_keys
 - The workspace directory on control plane is `/opt/iac` with the `$IAC_HOME` environment variable
-- Terraform state is local by default (consider remote backend for production)
+- **Terraform state is stored in GitLab** using HTTP backend (see GitLab Integration section above)

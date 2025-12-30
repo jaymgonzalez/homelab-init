@@ -1,0 +1,21 @@
+# =============================================================================
+# GitLab HTTP Backend Configuration - Example
+# =============================================================================
+# Copy this file to backend.hcl and fill in your GitLab credentials
+# IMPORTANT: backend.hcl is gitignored to protect your token
+#
+# Usage:
+#   cp backend.hcl.example backend.hcl
+#   # Edit backend.hcl with your credentials
+#   terraform init -backend-config=backend.hcl
+#   terraform init -migrate-state -backend-config=backend.hcl  # To migrate existing state
+# =============================================================================
+
+address        = "http://YOUR_GITLAB_IP/api/v4/projects/PROJECT_ID/terraform/state/gitlab-config"
+lock_address   = "http://YOUR_GITLAB_IP/api/v4/projects/PROJECT_ID/terraform/state/gitlab-config/lock"
+unlock_address = "http://YOUR_GITLAB_IP/api/v4/projects/PROJECT_ID/terraform/state/gitlab-config/lock"
+username       = "root"
+password       = "YOUR_GITLAB_TOKEN"
+lock_method    = "POST"
+unlock_method  = "DELETE"
+retry_wait_min = 5
