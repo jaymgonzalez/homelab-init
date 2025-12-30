@@ -46,6 +46,7 @@
       - tmux
       - unzip
       - vim
+      - zsh
 
     # Git config
     git_user_name: "IaC Control Plane"
@@ -314,12 +315,16 @@
       ansible.builtin.file:
         path: "{{ workspace_dir }}"
         state: directory
+        owner: "{{ non_root_user }}"
+        group: "{{ non_root_user }}"
         mode: '0755'
 
     - name: Create workspace subdirectories
       ansible.builtin.file:
         path: "{{ workspace_dir }}/{{ item }}"
         state: directory
+        owner: "{{ non_root_user }}"
+        group: "{{ non_root_user }}"
         mode: '0755'
       loop:
         - terraform
@@ -391,6 +396,131 @@
         marker: "# {mark} ANSIBLE MANAGED - IaC ALIASES"
 
     # -------------------------------------------------------------------------
+    # Setup Zsh + Oh My Zsh + Powerlevel10k (for jay user)
+    # -------------------------------------------------------------------------
+    - name: Check if Oh My Zsh is already installed
+      ansible.builtin.stat:
+        path: /home/{{ non_root_user }}/.oh-my-zsh
+      register: ohmyzsh_installed
+
+    - name: Install Oh My Zsh
+      ansible.builtin.shell: |
+        sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+      become: true
+      become_user: "{{ non_root_user }}"
+      when: not ohmyzsh_installed.stat.exists
+
+    - name: Install Powerlevel10k theme
+      ansible.builtin.git:
+        repo: https://github.com/romkatv/powerlevel10k.git
+        dest: /home/{{ non_root_user }}/.oh-my-zsh/custom/themes/powerlevel10k
+        depth: 1
+        version: master
+      become: true
+      become_user: "{{ non_root_user }}"
+
+    - name: Install zsh-autosuggestions plugin
+      ansible.builtin.git:
+        repo: https://github.com/zsh-users/zsh-autosuggestions
+        dest: /home/{{ non_root_user }}/.oh-my-zsh/custom/plugins/zsh-autosuggestions
+        version: master
+      become: true
+      become_user: "{{ non_root_user }}"
+
+    - name: Install zsh-syntax-highlighting plugin
+      ansible.builtin.git:
+        repo: https://github.com/zsh-users/zsh-syntax-highlighting.git
+        dest: /home/{{ non_root_user }}/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting
+        version: master
+      become: true
+      become_user: "{{ non_root_user }}"
+
+    - name: Backup existing .zshrc if it exists
+      ansible.builtin.copy:
+        src: /home/{{ non_root_user }}/.zshrc
+        dest: /home/{{ non_root_user }}/.zshrc.backup
+        remote_src: true
+        owner: "{{ non_root_user }}"
+        group: "{{ non_root_user }}"
+      when: ohmyzsh_installed.stat.exists
+      ignore_errors: true
+
+    - name: Create .zshrc with Powerlevel10k and IaC aliases
+      ansible.builtin.copy:
+        dest: /home/{{ non_root_user }}/.zshrc
+        owner: "{{ non_root_user }}"
+        group: "{{ non_root_user }}"
+        mode: '0644'
+        content: |
+          # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
+          if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
+            source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+          fi
+
+          # Path to your oh-my-zsh installation.
+          export ZSH="$HOME/.oh-my-zsh"
+
+          # Set name of the theme to load
+          ZSH_THEME="powerlevel10k/powerlevel10k"
+
+          # Plugins
+          plugins=(
+              git
+              docker
+              terraform
+              ansible
+              zsh-autosuggestions
+              zsh-syntax-highlighting
+          )
+
+          source $ZSH/oh-my-zsh.sh
+
+          # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
+          [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
+
+          # User configuration
+          export LANG=en_US.UTF-8
+          export EDITOR='vim'
+
+          # =========================================================================
+          # IaC Workspace and Aliases
+          # =========================================================================
+          export IAC_HOME={{ workspace_dir }}
+          alias iac='cd $IAC_HOME'
+
+          # Terraform aliases (custom ones, plugin provides others)
+          alias tf='terraform'
+          alias tfi='terraform init'
+          alias tfp='terraform plan'
+          alias tfa='terraform apply'
+          alias tfd='terraform destroy'
+          alias tfv='terraform validate'
+
+          # Ansible aliases (custom ones, plugin provides others)
+          alias ap='ansible-playbook'
+          alias al='ansible-lint'
+
+          # Git aliases (custom ones, plugin provides many others)
+          alias gs='git status'
+          alias gd='git diff'
+          alias gl='git log --oneline -10'
+          alias gp='git pull'
+
+          # Tailscale
+          alias ts='tailscale'
+          alias tss='tailscale status'
+
+          # General
+          alias ll='ls -lah'
+          alias la='ls -A'
+          alias l='ls -CF'
+
+    - name: Change shell to zsh for user
+      ansible.builtin.user:
+        name: "{{ non_root_user }}"
+        shell: /usr/bin/zsh
+
+    # -------------------------------------------------------------------------
     # Verify Tailscale (installed during bootstrap)
     # -------------------------------------------------------------------------
     - name: Check Tailscale status
@@ -420,11 +550,12 @@
           - "Workspace: {{ workspace_dir }}"
           - ""
           - "Users configured:"
-          - "  - root (full access)"
-          - "  - {{ non_root_user }} (sudo with NOPASSWD)"
+          - "  - root (bash, full access)"
+          - "  - {{ non_root_user }} (zsh + oh-my-zsh + powerlevel10k, sudo with NOPASSWD)"
           - ""
           - "Next steps:"
           - "1. Add SSH keys to Git provider (see above)"
           - "2. SSH as {{ non_root_user }}: ssh {{ non_root_user }}@<control-plane-ip>"
-          - "3. Clone IaC repo to {{ workspace_dir }}"
+          - "3. Run 'p10k configure' to customize your prompt"
+          - "4. Clone IaC repo to {{ workspace_dir }}"
           - "============================================"
