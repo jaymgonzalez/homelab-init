@@ -10,6 +10,11 @@
   gather_facts: true
 
   vars:
+    # User configuration
+    non_root_user: "jay"
+    non_root_user_groups:
+      - sudo
+
     # Terraform
     terraform_version: "1.14.3"
     terraform_arch: 'amd64'
@@ -36,6 +41,7 @@
       - python3-pip
       - python3-venv
       - rsync
+      - sudo
       - tree
       - tmux
       - unzip
@@ -69,6 +75,49 @@
       ansible.builtin.apt:
         name: "{{ system_packages }}"
         state: present
+
+    # -------------------------------------------------------------------------
+    # Create Non-Root User
+    # -------------------------------------------------------------------------
+    - name: Create non-root user
+      ansible.builtin.user:
+        name: "{{ non_root_user }}"
+        groups: "{{ non_root_user_groups }}"
+        append: true
+        shell: /bin/bash
+        create_home: true
+        state: present
+
+    - name: Configure passwordless sudo for user
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers.d/{{ non_root_user }}
+        line: "{{ non_root_user }} ALL=(ALL) NOPASSWD:ALL"
+        create: true
+        mode: '0440'
+        validate: 'visudo -cf %s'
+
+    - name: Ensure .ssh directory exists for user
+      ansible.builtin.file:
+        path: /home/{{ non_root_user }}/.ssh
+        state: directory
+        owner: "{{ non_root_user }}"
+        group: "{{ non_root_user }}"
+        mode: '0700'
+
+    - name: Check if root authorized_keys exists
+      ansible.builtin.stat:
+        path: /root/.ssh/authorized_keys
+      register: root_authorized_keys
+
+    - name: Copy SSH authorized_keys from root to user
+      ansible.builtin.copy:
+        src: /root/.ssh/authorized_keys
+        dest: /home/{{ non_root_user }}/.ssh/authorized_keys
+        remote_src: true
+        owner: "{{ non_root_user }}"
+        group: "{{ non_root_user }}"
+        mode: '0600'
+      when: root_authorized_keys.stat.exists
 
     # -------------------------------------------------------------------------
     # Install Terraform
@@ -148,27 +197,115 @@
         scope: global
 
     # -------------------------------------------------------------------------
-    # Generate SSH Key
+    # Generate SSH Key (root)
     # -------------------------------------------------------------------------
-    - name: Check if SSH key exists
+    - name: Check if SSH key exists (root)
       ansible.builtin.stat:
         path: /root/.ssh/id_ed25519
-      register: ssh_key
+      register: ssh_key_root
 
-    - name: Generate SSH key
-      ansible.builtin.command: ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -C "control-plane@homelab"
-      when: not ssh_key.stat.exists
+    - name: Generate SSH key (root)
+      ansible.builtin.command: ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -C "control-plane-root@homelab"
+      when: not ssh_key_root.stat.exists
 
-    - name: Read SSH public key
+    - name: Read SSH public key (root)
       ansible.builtin.slurp:
         src: /root/.ssh/id_ed25519.pub
-      register: ssh_public_key
+      register: ssh_public_key_root
 
-    - name: Display SSH public key
+    # -------------------------------------------------------------------------
+    # Generate SSH Key (non-root user)
+    # -------------------------------------------------------------------------
+    - name: Check if SSH key exists (user)
+      ansible.builtin.stat:
+        path: /home/{{ non_root_user }}/.ssh/id_ed25519
+      register: ssh_key_user
+
+    - name: Generate SSH key (user)
+      ansible.builtin.command: ssh-keygen -t ed25519 -f /home/{{ non_root_user }}/.ssh/id_ed25519 -N "" -C "{{ non_root_user }}@homelab"
+      become: true
+      become_user: "{{ non_root_user }}"
+      when: not ssh_key_user.stat.exists
+
+    - name: Set correct ownership on user SSH key
+      ansible.builtin.file:
+        path: /home/{{ non_root_user }}/.ssh/{{ item }}
+        owner: "{{ non_root_user }}"
+        group: "{{ non_root_user }}"
+        mode: '0600'
+      loop:
+        - id_ed25519
+        - id_ed25519.pub
+      when: not ssh_key_user.stat.exists
+
+    - name: Read SSH public key (user)
+      ansible.builtin.slurp:
+        src: /home/{{ non_root_user }}/.ssh/id_ed25519.pub
+      register: ssh_public_key_user
+
+    # -------------------------------------------------------------------------
+    # Display SSH Keys
+    # -------------------------------------------------------------------------
+    - name: Display SSH public keys
       ansible.builtin.debug:
         msg:
-          - "SSH Public Key (add this to your Git provider and PVE authorized_keys):"
-          - "{{ ssh_public_key.content | b64decode }}"
+          - "============================================"
+          - "SSH PUBLIC KEYS"
+          - "============================================"
+          - "ROOT SSH Key (add to Git provider and PVE):"
+          - "{{ ssh_public_key_root.content | b64decode }}"
+          - ""
+          - "{{ non_root_user | upper }} SSH Key (add to Git provider):"
+          - "{{ ssh_public_key_user.content | b64decode }}"
+          - "============================================"
+
+    # -------------------------------------------------------------------------
+    # Add SSH Keys to common.yml (on local machine)
+    # -------------------------------------------------------------------------
+    - name: Check if root SSH key already exists in common.yml
+      ansible.builtin.lineinfile:
+        path: "{{ playbook_dir }}/../group_vars/all/common.yml"
+        line: '  - "{{ ssh_public_key_root.content | b64decode | trim }}"'
+        state: absent
+      delegate_to: localhost
+      check_mode: true
+      register: root_key_check
+      changed_when: false
+
+    - name: Add root SSH key to common.yml
+      ansible.builtin.lineinfile:
+        path: "{{ playbook_dir }}/../group_vars/all/common.yml"
+        line: '  - "{{ ssh_public_key_root.content | b64decode | trim }}"'
+        insertafter: '^common_ssh_public_keys:'
+        state: present
+      delegate_to: localhost
+      when: root_key_check is not changed
+
+    - name: Check if user SSH key already exists in common.yml
+      ansible.builtin.lineinfile:
+        path: "{{ playbook_dir }}/../group_vars/all/common.yml"
+        line: '  - "{{ ssh_public_key_user.content | b64decode | trim }}"'
+        state: absent
+      delegate_to: localhost
+      check_mode: true
+      register: user_key_check
+      changed_when: false
+
+    - name: Add user SSH key to common.yml
+      ansible.builtin.lineinfile:
+        path: "{{ playbook_dir }}/../group_vars/all/common.yml"
+        line: '  - "{{ ssh_public_key_user.content | b64decode | trim }}"'
+        insertafter: '^common_ssh_public_keys:'
+        state: present
+      delegate_to: localhost
+      when: user_key_check is not changed
+
+    - name: Notify about SSH key addition
+      ansible.builtin.debug:
+        msg:
+          - "SSH keys have been added to group_vars/all/common.yml"
+          - "These keys will now be distributed to all infrastructure hosts"
+      when: (root_key_check is not changed) or (user_key_check is not changed)
 
     # -------------------------------------------------------------------------
     # Create Workspace
@@ -193,7 +330,7 @@
     # -------------------------------------------------------------------------
     # Add useful aliases
     # -------------------------------------------------------------------------
-    - name: Add useful aliases to bashrc
+    - name: Add useful aliases to bashrc (root)
       ansible.builtin.blockinfile:
         path: /root/.bashrc
         block: |
@@ -220,6 +357,37 @@
           # Tailscale
           alias ts='tailscale'
           alias tss='tailscale status'
+        marker: "# {mark} ANSIBLE MANAGED - IaC ALIASES"
+
+    - name: Add useful aliases to bashrc (user)
+      ansible.builtin.blockinfile:
+        path: /home/{{ non_root_user }}/.bashrc
+        block: |
+          # IaC Aliases
+          alias tf='terraform'
+          alias tfi='terraform init'
+          alias tfp='terraform plan'
+          alias tfa='terraform apply'
+          alias tfd='terraform destroy'
+          alias tfv='terraform validate'
+          alias ap='ansible-playbook'
+          alias al='ansible-lint'
+
+          # Workspace
+          export IAC_HOME={{ workspace_dir }}
+          alias iac='cd $IAC_HOME'
+
+          # Git
+          alias gs='git status'
+          alias gd='git diff'
+          alias gl='git log --oneline -10'
+          alias gp='git pull'
+
+          # Tailscale
+          alias ts='tailscale'
+          alias tss='tailscale status'
+        owner: "{{ non_root_user }}"
+        group: "{{ non_root_user }}"
         marker: "# {mark} ANSIBLE MANAGED - IaC ALIASES"
 
     # -------------------------------------------------------------------------
@@ -251,7 +419,12 @@
           - "Tailscale: {{ tailscale_ipv4.stdout if tailscale_ipv4.rc == 0 else 'Not connected' }}"
           - "Workspace: {{ workspace_dir }}"
           - ""
+          - "Users configured:"
+          - "  - root (full access)"
+          - "  - {{ non_root_user }} (sudo with NOPASSWD)"
+          - ""
           - "Next steps:"
-          - "1. Add SSH key to Git provider"
-          - "2. Clone IaC repo to {{ workspace_dir }}"
+          - "1. Add SSH keys to Git provider (see above)"
+          - "2. SSH as {{ non_root_user }}: ssh {{ non_root_user }}@<control-plane-ip>"
+          - "3. Clone IaC repo to {{ workspace_dir }}"
           - "============================================"
