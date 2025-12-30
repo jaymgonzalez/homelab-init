@@ -1,0 +1,43 @@
+# =============================================================================
+# GitLab Configuration
+# =============================================================================
+# Copy this file to terraform.tfvars and fill in your values
+# IMPORTANT: terraform.tfvars is gitignored to protect your token
+# =============================================================================
+
+# GitLab instance URL (IP-based or domain)
+gitlab_url = "http://192.168.1.50"  # Replace with your GitLab IP or URL
+
+# GitLab personal access token (scopes: api, read_repository, write_repository)
+# Create at: User Settings → Access Tokens
+gitlab_token = "glpat-xxxxxxxxxxxxxxxxxxxx"  # Replace with your token
+
+# Allow insecure SSL (for self-signed certs or HTTP)
+gitlab_insecure = true
+
+# =============================================================================
+# Project Configuration
+# =============================================================================
+
+project_name        = "proxmox-iac"
+project_description = "Proxmox Infrastructure as Code - Homelab bootstrap project"
+project_visibility  = "private"  # Options: private, internal, public
+
+# Default branch (should match your Git default branch)
+project_default_branch = "main"
+
+# Enable/disable features
+enable_issues            = true
+enable_wiki              = true
+enable_snippets          = true
+enable_container_registry = false
+enable_lfs               = true
+
+# =============================================================================
+# Optional: Group Configuration
+# =============================================================================
+# Leave empty to create project in your personal namespace
+# Uncomment and set to create a group and place project there
+
+# group_name = "homelab"
+# group_path = "homelab"  # URL slug, defaults to lowercase group_name if empty
